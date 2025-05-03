@@ -5,8 +5,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
-from data_generator import data_generator
 from utils import get_status_color
+from weather_api import weather_api  # Our new weather API client
+from dotenv import load_dotenv
+import pytz
+import os
+
+# Load environment variables
+load_dotenv()
 
 # Configure the page
 st.set_page_config(
@@ -15,42 +21,59 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state for theme if it doesn't exist
+# Initialize session state
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
+if "weather_location" not in st.session_state:
+    st.session_state.weather_location = os.getenv("LOCATION", "Harare")
+if "last_refresh_time" not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now()
 
 # Title and description
 st.title("Zimbabwe Weather Integration")
 st.write("Live Zimbabwe weather data and forecasts to optimize your energy generation")
 
-# Function to refresh data
-def refresh_data():
-    return data_generator.generate_current_data()
+# Timezone setup
+tz = pytz.timezone("Africa/Harare")
 
-# Auto-refresh checkbox
+# Function to refresh weather data
+def refresh_weather_data():
+    try:
+        current = weather_api.get_current_weather(st.session_state.weather_location)
+        forecast = weather_api.get_forecast(location=st.session_state.weather_location)
+        return {
+            "current": current,
+            "forecast": forecast,
+            "timestamp": datetime.now(tz)
+        }
+    except Exception as e:
+        st.error(f"Error fetching weather data: {str(e)}")
+        return None
+
+# Auto-refresh configuration
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=True)
-
-# Refresh interval
 refresh_interval = st.sidebar.slider("Auto-refresh interval (sec)", 5, 60, 15)
 
-# Manual refresh button
 if st.sidebar.button("Refresh Now"):
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
+    st.session_state.weather_data = refresh_weather_data()
+    st.session_state.last_refresh_time = datetime.now(tz)
 
-# Check if we need to refresh based on the time elapsed
-if "last_refresh_time" not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
-else:
-    elapsed = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
-    if auto_refresh and elapsed >= refresh_interval:
-        st.session_state.last_refresh_time = datetime.now()
-        st.session_state.current_data = refresh_data()
+# Check if we need to refresh
+elapsed = (datetime.now(tz) - st.session_state.last_refresh_time).total_seconds()
+if auto_refresh and elapsed >= refresh_interval:
+    st.session_state.weather_data = refresh_weather_data()
+    st.session_state.last_refresh_time = datetime.now(tz)
 
-# Get current data
-current_data = st.session_state.current_data
-environmental_data = current_data["environmental"]
+# Get current data or initialize
+if "weather_data" not in st.session_state:
+    st.session_state.weather_data = refresh_weather_data()
+
+if st.session_state.weather_data is None:
+    st.error("Failed to load weather data. Please check your API key and connection.")
+    st.stop()
+
+current_weather = st.session_state.weather_data["current"]
+forecast = st.session_state.weather_data["forecast"]
 last_refresh = st.session_state.last_refresh_time
 
 # Display last refresh time
@@ -63,7 +86,7 @@ st.subheader("Current Weather Conditions")
 col1, col2, col3 = st.columns(3)
 
 # Solar irradiance
-irradiance = environmental_data["irradiance"]
+irradiance = current_weather.irradiance
 irradiance_color = get_status_color(irradiance, {"green": (600, float('inf')), "yellow": (200, 600), "red": (0, 200)})
 
 with col1:
@@ -75,12 +98,15 @@ with col1:
                 {irradiance:.1f} W/m²
             </h2>
             <p style="margin:0;">
-                {
+                {{
                     "Excellent for solar generation" if irradiance > 800 else
                     "Good for solar generation" if irradiance > 500 else
                     "Moderate solar potential" if irradiance > 200 else
                     "Low solar potential"
-                }
+                }}
+            </p>
+            <p style="margin:0; font-size: 0.8em;">
+                {current_weather.conditions} ({current_weather.description})
             </p>
         </div>
         """, 
@@ -88,7 +114,7 @@ with col1:
     )
 
 # Wind speed
-wind_speed = environmental_data["wind_speed"]
+wind_speed = current_weather.wind_speed
 wind_color = get_status_color(wind_speed, {"green": (4, float('inf')), "yellow": (2, 4), "red": (0, 2)})
 
 with col2:
@@ -100,12 +126,15 @@ with col2:
                 {wind_speed:.1f} m/s
             </h2>
             <p style="margin:0;">
-                {
+                {{
                     "Excellent for wind generation" if wind_speed > 6 else
                     "Good for wind generation" if wind_speed > 4 else
                     "Moderate wind potential" if wind_speed > 2 else
                     "Low wind potential"
-                }
+                }}
+            </p>
+            <p style="margin:0; font-size: 0.8em;">
+                Direction: {current_weather.wind_direction or 'N/A'}°
             </p>
         </div>
         """, 
@@ -113,7 +142,7 @@ with col2:
     )
 
 # Temperature
-temperature = environmental_data["temperature"]
+temperature = current_weather.temperature
 temp_color = get_status_color(temperature, {"green": (15, 25), "yellow": (5, 15), "red": (25, 45)})
 
 with col3:
@@ -125,107 +154,91 @@ with col3:
                 {temperature:.1f} °C
             </h2>
             <p style="margin:0;">
-                {
+                {{
                     "Optimal for system performance" if 15 <= temperature <= 25 else
                     "Too hot - reduced efficiency" if temperature > 25 else
                     "Too cold - reduced efficiency"
-                }
+                }}
+            </p>
+            <p style="margin:0; font-size: 0.8em;">
+                Feels like: {current_weather.feels_like:.1f}°C
             </p>
         </div>
         """, 
         unsafe_allow_html=True
     )
 
-# Zimbabwe location selector
-from weather_api import zimbabwe_weather
-
-# Add a location selector in the sidebar
-if "weather_location" not in st.session_state:
-    st.session_state.weather_location = "Harare"
-
-available_locations = zimbabwe_weather.get_available_locations()
+# Location selector in sidebar
+available_locations = weather_api.get_available_locations()
 selected_location = st.sidebar.selectbox(
     "Select Zimbabwe Location",
     available_locations,
     index=available_locations.index(st.session_state.weather_location)
 )
 
-# Update the selected location
 if selected_location != st.session_state.weather_location:
     st.session_state.weather_location = selected_location
+    st.session_state.weather_data = refresh_weather_data()
     st.rerun()
 
 # API Key Input
-if "zimbabwe_weather_api_key" not in st.session_state:
-    st.session_state.zimbabwe_weather_api_key = ""
-
-with st.sidebar.expander("Zimbabwe Weather API Settings"):
+with st.sidebar.expander("API Settings"):
     api_key = st.text_input(
-        "Zimbabwe Weather API Key",
-        value=st.session_state.zimbabwe_weather_api_key,
+        "RapidAPI Key",
+        value=os.getenv("RAPIDAPI_KEY", ""),
         type="password",
-        help="Enter your Zimbabwe Weather API key to access real weather data"
+        help="Get your API key from RapidAPI marketplace"
     )
     
-    if api_key != st.session_state.zimbabwe_weather_api_key:
-        st.session_state.zimbabwe_weather_api_key = api_key
-        # Set the API key in environment variables
-        import os
-        os.environ["ZIMBABWE_WEATHER_API_KEY"] = api_key
-        st.success("API key updated. Refresh data to use it.")
+    if api_key and api_key != os.getenv("RAPIDAPI_KEY"):
+        os.environ["RAPIDAPI_KEY"] = api_key
+        weather_api.api_key = api_key
+        st.success("API key updated successfully!")
+        st.session_state.weather_data = refresh_weather_data()
 
 # Weather forecast section
 st.subheader(f"5-Day Weather Forecast for {st.session_state.weather_location}")
 
-# Get weather forecast data for the selected location
-forecast = data_generator.get_weather_forecast(st.session_state.weather_location)
-
 # Create forecast cards
 forecast_cols = st.columns(len(forecast))
 
+# Weather icon mapping
+icon_mapping = {
+    "Clear": "☀️",
+    "Clouds": "☁️",
+    "Rain": "🌧️",
+    "Drizzle": "🌦️",
+    "Thunderstorm": "⛈️",
+    "Snow": "❄️",
+    "Mist": "🌫️"
+}
+
 for i, day in enumerate(forecast):
     with forecast_cols[i]:
-        # Determine weather icon
-        if day["conditions"] == "Sunny":
-            icon = "☀️"
-        elif day["conditions"] == "Partly Cloudy":
-            icon = "⛅"
-        elif day["conditions"] == "Cloudy":
-            icon = "☁️"
-        elif day["conditions"] == "Rainy":
-            icon = "🌧️"
-        elif day["conditions"] == "Windy":
-            icon = "💨"
-        else:
-            icon = "🌤️"
+        icon = icon_mapping.get(day.conditions, "🌤️")
         
         # Set background color based on conditions
-        if day["conditions"] == "Sunny":
-            bg_color = "#fff9e6" if st.session_state.theme == "light" else "#332e1f"
-        elif day["conditions"] == "Partly Cloudy":
-            bg_color = "#f0f0f0" if st.session_state.theme == "light" else "#2a2a2a"
-        elif day["conditions"] == "Cloudy":
-            bg_color = "#e0e0e0" if st.session_state.theme == "light" else "#252525"
-        elif day["conditions"] == "Rainy":
-            bg_color = "#e6f2ff" if st.session_state.theme == "light" else "#1a2833"
-        elif day["conditions"] == "Windy":
-            bg_color = "#e6ffe6" if st.session_state.theme == "light" else "#1a331a"
-        else:
-            bg_color = "#f5f5f5" if st.session_state.theme == "light" else "#2d2d2d"
+        bg_color = {
+            "Clear": "#fff9e6" if st.session_state.theme == "light" else "#332e1f",
+            "Clouds": "#f0f0f0" if st.session_state.theme == "light" else "#2a2a2a",
+            "Rain": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
+            "Drizzle": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
+            "Thunderstorm": "#ffebee" if st.session_state.theme == "light" else "#330000",
+        }.get(day.conditions, "#f5f5f5" if st.session_state.theme == "light" else "#2d2d2d")
         
         st.markdown(
             f"""
             <div style="padding: 10px; border-radius: 5px; background-color: {bg_color}; text-align: center;">
-                <h3 style="margin:0;">{day["day"]}</h3>
-                <p style="margin:0; font-size: 0.8em;">{day["date"]}</p>
+                <h3 style="margin:0;">{day.day_name}</h3>
+                <p style="margin:0; font-size: 0.8em;">{day.date}</p>
                 <h1 style="margin:5px 0; font-size: 2.5em;">{icon}</h1>
-                <h3 style="margin:0;">{day["conditions"]}</h3>
-                <p style="margin:5px 0;">{day["temp_high"]:.1f}°C / {day["temp_low"]:.1f}°C</p>
-                <p style="margin:0;">Wind: {day["wind_speed"]:.1f} m/s</p>
+                <h3 style="margin:0;">{day.conditions}</h3>
+                <p style="margin:5px 0;">{day.temp_high:.1f}°C / {day.temp_low:.1f}°C</p>
+                <p style="margin:0;">Wind: {day.wind_speed:.1f} m/s</p>
                 <div style="margin-top: 10px; padding: 5px; border-radius: 3px; background-color: rgba(0,0,0,0.05);">
                     <p style="margin:0; font-weight: bold;">Energy Forecast</p>
-                    <p style="margin:0;">Solar: <span style="color: {'green' if day['solar_potential'] == 'High' else 'orange' if day['solar_potential'] == 'Medium' else 'red'}">{day["solar_potential"]}</span></p>
-                    <p style="margin:0;">Wind: <span style="color: {'green' if day['wind_potential'] == 'High' else 'orange' if day['wind_potential'] == 'Medium' else 'red'}">{day["wind_potential"]}</span></p>
+                    <p style="margin:0;">Solar: <span style="color: {'green' if day.solar_potential == 'High' else 'orange' if day.solar_potential == 'Medium' else 'red'}">{day.solar_potential}</span></p>
+                    <p style="margin:0;">Wind: <span style="color: {'green' if day.wind_potential == 'High' else 'orange' if day.wind_potential == 'Medium' else 'red'}">{day.wind_potential}</span></p>
                 </div>
             </div>
             """, 
@@ -235,173 +248,136 @@ for i, day in enumerate(forecast):
 # Weather impact on energy generation
 st.subheader("Weather Impact on Energy Generation")
 
-# Get historical data
-historical_data = data_generator.get_historical_data(timeframe="day")
+# Create tabs for different analyses
+tab1, tab2 = st.tabs(["Solar vs. Weather", "Wind vs. Weather"])
 
-if not historical_data.empty:
-    # Create tabs for different analyses
-    tab1, tab2 = st.tabs(["Solar vs. Weather", "Wind vs. Weather"])
+# Generate mock historical data (replace with real data from your system)
+def generate_historical_data(current, forecast):
+    """Generate mock historical data based on current conditions and forecast"""
+    dates = pd.date_range(end=datetime.now(tz), periods=30, freq="D")
+    data = []
     
-    # Tab 1: Solar vs. Weather
-    with tab1:
-        # Create scatter plot for solar power vs. irradiance
-        fig = px.scatter(
-            historical_data,
-            x="irradiance",
-            y="solar_power",
-            color="temperature",
-            color_continuous_scale="Viridis",
-            labels={"irradiance": "Solar Irradiance (W/m²)", "solar_power": "Solar Power (kW)", "temperature": "Temperature (°C)"},
-            title="Solar Power vs. Irradiance"
-        )
+    for i, date in enumerate(dates):
+        # Base values on current conditions with some variation
+        temp_variation = np.random.normal(0, 3)
+        wind_variation = np.random.normal(0, 1)
+        cloud_variation = np.random.normal(0, 10)
         
-        # Add trendline with error handling
-        try:
-            # Check for NaN or zero values that could cause the SVD convergence error
-            mask = ~np.isnan(historical_data["irradiance"]) & ~np.isnan(historical_data["solar_power"]) & (historical_data["irradiance"] != 0)
-            
-            if sum(mask) > 1:  # We need at least 2 valid points for a line
-                x_valid = historical_data["irradiance"][mask]
-                y_valid = historical_data["solar_power"][mask]
-                
-                # Sort the data for plotting
-                sort_indices = np.argsort(x_valid)
-                x_sorted = x_valid.iloc[sort_indices]
-                
-                # Calculate the trendline
-                poly_fit = np.polyfit(x_valid, y_valid, 1)
-                poly_1d = np.poly1d(poly_fit)
-                
-                # Add trendline to the plot
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_sorted,
-                        y=poly_1d(x_sorted),
-                        mode="lines",
-                        line=dict(color="red", dash="dash"),
-                        name="Trendline"
-                    )
-                )
-        except Exception as e:
-            st.warning(f"Could not calculate trendline: insufficient or invalid data")
+        temp = current.temperature + temp_variation
+        wind = current.wind_speed + wind_variation
+        clouds = current.cloud_cover + cloud_variation
         
-        fig.update_layout(
-            height=500,
-            xaxis_title="Solar Irradiance (W/m²)",
-            yaxis_title="Solar Power (kW)",
-            margin=dict(l=60, r=20, t=50, b=60),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)' if st.session_state.theme == "dark" else 'rgba(240,242,246,0.5)',
-            font=dict(color="#262730" if st.session_state.theme == "light" else "#FAFAFA")
-        )
+        # Ensure realistic ranges
+        temp = max(min(temp, 40), -5)
+        wind = max(min(wind, 20), 0)
+        clouds = max(min(clouds, 100), 0)
         
-        # Add grid lines
-        fig.update_xaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.1)'
-        )
+        is_day = current.sunrise.time() <= date.time() <= current.sunset.time()
+        irradiance = weather_api._calculate_irradiance(clouds, is_day) if is_day else 0
         
-        fig.update_yaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.1)'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Add explanation
-        st.markdown("""
-        The scatter plot above shows the relationship between solar irradiance and solar power generation. 
-        Each point is colored according to the ambient temperature at that time. As expected, there is a 
-        strong positive correlation between irradiance and power output.
-        
-        **Key observations:**
-        - Higher irradiance generally results in higher power output
-        - Temperature also affects solar panel efficiency (slightly lower efficiency at higher temperatures)
-        - The relationship is approximately linear within the operating range
-        """)
+        data.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "temperature": temp,
+            "wind_speed": wind,
+            "cloud_cover": clouds,
+            "irradiance": irradiance,
+            "solar_power": max(0, irradiance * 0.15 * (1 + np.random.normal(0, 0.1))),  # 15% efficiency with variation
+            "wind_power": max(0, wind**3 * 0.5 * (1 + np.random.normal(0, 0.2)))  # Cubic relationship with variation
+        })
     
-    # Tab 2: Wind vs. Weather
-    with tab2:
-        # Create scatter plot for wind power vs. wind speed
-        fig = px.scatter(
-            historical_data,
-            x="wind_speed",
-            y="wind_power",
-            color="temperature",
-            color_continuous_scale="Viridis",
-            labels={"wind_speed": "Wind Speed (m/s)", "wind_power": "Wind Power (kW)", "temperature": "Temperature (°C)"},
-            title="Wind Power vs. Wind Speed"
-        )
-        
-        # Cubic relationship for wind power (power ~ wind_speed^3)
-        x_range = np.linspace(min(historical_data["wind_speed"]), max(historical_data["wind_speed"]), 100)
-        
-        # Simple cubic model approximation
-        a = 0.1  # scaling factor
-        y_model = a * x_range**3
-        
+    return pd.DataFrame(data)
+
+historical_data = generate_historical_data(current_weather, forecast)
+
+# Tab 1: Solar vs. Weather
+with tab1:
+    fig = px.scatter(
+        historical_data,
+        x="irradiance",
+        y="solar_power",
+        color="temperature",
+        color_continuous_scale="Viridis",
+        labels={
+            "irradiance": "Solar Irradiance (W/m²)",
+            "solar_power": "Solar Power (kW)", 
+            "temperature": "Temperature (°C)"
+        },
+        title="Solar Power vs. Irradiance"
+    )
+    
+    # Add trendline
+    try:
+        x = historical_data["irradiance"]
+        y = historical_data["solar_power"]
+        coefficients = np.polyfit(x, y, 1)
+        polynomial = np.poly1d(coefficients)
         fig.add_trace(
             go.Scatter(
-                x=x_range,
-                y=y_model,
+                x=x,
+                y=polynomial(x),
                 mode="lines",
                 line=dict(color="red", dash="dash"),
-                name="Power Curve Model"
+                name="Trendline"
             )
         )
-        
-        fig.update_layout(
-            height=500,
-            xaxis_title="Wind Speed (m/s)",
-            yaxis_title="Wind Power (kW)",
-            margin=dict(l=60, r=20, t=50, b=60),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)' if st.session_state.theme == "dark" else 'rgba(240,242,246,0.5)',
-            font=dict(color="#262730" if st.session_state.theme == "light" else "#FAFAFA")
+    except:
+        pass
+    
+    fig.update_layout(
+        height=500,
+        margin=dict(l=60, r=20, t=50, b=60),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)' if st.session_state.theme == "dark" else 'rgba(240,242,246,0.5)',
+        font=dict(color="#262730" if st.session_state.theme == "light" else "#FAFAFA")
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# Tab 2: Wind vs. Weather
+with tab2:
+    fig = px.scatter(
+        historical_data,
+        x="wind_speed",
+        y="wind_power",
+        color="temperature",
+        color_continuous_scale="Viridis",
+        labels={
+            "wind_speed": "Wind Speed (m/s)",
+            "wind_power": "Wind Power (kW)", 
+            "temperature": "Temperature (°C)"
+        },
+        title="Wind Power vs. Wind Speed"
+    )
+    
+    # Add cubic relationship model
+    x_range = np.linspace(0, historical_data["wind_speed"].max(), 100)
+    y_model = 0.5 * x_range**3  # Simple cubic model
+    fig.add_trace(
+        go.Scatter(
+            x=x_range,
+            y=y_model,
+            mode="lines",
+            line=dict(color="red", dash="dash"),
+            name="Power Curve Model"
         )
-        
-        # Add grid lines
-        fig.update_xaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.1)'
-        )
-        
-        fig.update_yaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.1)'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Add explanation
-        st.markdown("""
-        The scatter plot above shows the relationship between wind speed and wind power generation.
-        Each point is colored according to the ambient temperature at that time. Wind power has a 
-        cubic relationship with wind speed (P ∝ v³), which is illustrated by the model curve.
-        
-        **Key observations:**
-        - Wind power increases with the cube of wind speed (P ∝ v³)
-        - There is more variability in wind power output compared to solar
-        - Temperature has minimal effect on wind power generation
-        - Cut-in speed (minimum speed to generate power) is around 2 m/s
-        """)
-else:
-    st.info("Not enough historical data available yet for weather impact analysis.")
+    )
+    
+    fig.update_layout(
+        height=500,
+        margin=dict(l=60, r=20, t=50, b=60),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)' if st.session_state.theme == "dark" else 'rgba(240,242,246,0.5)',
+        font=dict(color="#262730" if st.session_state.theme == "light" else "#FAFAFA")
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # Weather-based energy optimization
 st.subheader("Weather-Based Energy Optimization")
-
-# Create columns for optimization insights
 opt_col1, opt_col2 = st.columns(2)
 
 with opt_col1:
     st.markdown("### Today's Generation Strategy")
     
-    # Determine optimal strategy based on current conditions
+    # Determine optimal strategy
     if irradiance > 500 and wind_speed < 3:
         strategy = "Solar Priority"
         explanation = "High solar irradiance and low wind speed indicate solar will be your primary generation source today."
@@ -428,53 +404,48 @@ with opt_col1:
         unsafe_allow_html=True
     )
     
-    # Add specific recommendations
+    # Recommendations
     st.markdown("### Recommendations")
-    
-    recommendations = []
     if strategy == "Solar Priority":
-        recommendations = [
+        recs = [
             "Ensure solar panels are clean and unobstructed",
-            "Temporarily disable any shadowing automation to maximize solar exposure",
-            "Consider scheduling high-energy activities during peak sun hours",
-            "Store excess energy in battery for night use"
+            "Maximize solar exposure by adjusting panel angles if possible",
+            "Schedule high-energy activities during peak sun hours",
+            "Store excess energy in batteries for night use"
         ]
     elif strategy == "Wind Priority":
-        recommendations = [
+        recs = [
             "Verify wind turbine maintenance is up to date",
             "Clear any potential obstructions around turbines",
-            "Consider scheduling high-energy activities during peak wind periods",
-            "Store excess energy in battery for low-wind periods"
+            "Schedule high-energy activities during peak wind periods",
+            "Store excess energy in batteries for low-wind periods"
         ]
     else:
-        recommendations = [
-            "Divide loads between both energy sources based on real-time generation",
+        recs = [
+            "Balance loads between both energy sources",
             "Monitor both systems for optimal performance",
-            "Dynamically adjust consumption based on generation patterns",
-            "Maintain batteries at moderate charge level to accommodate fluctuations"
+            "Dynamically adjust consumption based on generation",
+            "Maintain batteries at moderate charge level"
         ]
     
-    for rec in recommendations:
+    for rec in recs:
         st.markdown(f"- {rec}")
 
 with opt_col2:
     st.markdown("### 5-Day Energy Forecast")
     
-    # Process forecast data for chart
-    dates = [day["date"] for day in forecast]
-    solar_potential = [100 if day["solar_potential"] == "High" else 60 if day["solar_potential"] == "Medium" else 30 for day in forecast]
-    wind_potential = [100 if day["wind_potential"] == "High" else 60 if day["wind_potential"] == "Medium" else 30 for day in forecast]
+    # Prepare data for chart
+    dates = [day.date for day in forecast]
+    solar_potential = [100 if day.solar_potential == "High" else 60 if day.solar_potential == "Medium" else 30 for day in forecast]
+    wind_potential = [100 if day.wind_potential == "High" else 60 if day.wind_potential == "Medium" else 30 for day in forecast]
     
-    # Create grouped bar chart for energy potential
     fig = go.Figure()
-    
     fig.add_trace(go.Bar(
         x=dates,
         y=solar_potential,
         name="Solar Potential",
         marker_color="#FFD700"
     ))
-    
     fig.add_trace(go.Bar(
         x=dates,
         y=wind_potential,
@@ -493,78 +464,56 @@ with opt_col2:
         font=dict(color="#262730" if st.session_state.theme == "light" else "#FAFAFA"),
         barmode="group"
     )
-    
-    # Add grid lines
-    fig.update_xaxes(
-        showgrid=False
-    )
-    
-    fig.update_yaxes(
-        showgrid=True,
-        gridwidth=1,
-        gridcolor='rgba(128,128,128,0.1)'
-    )
-    
     st.plotly_chart(fig, use_container_width=True)
     
-    # Add weekly optimization tips
-    st.markdown("### Weekly Planning Recommendations")
-    
-    # Create simple forecasting for the week based on forecast data
+    # Weekly planning recommendations
     best_solar_day = dates[solar_potential.index(max(solar_potential))]
     best_wind_day = dates[wind_potential.index(max(wind_potential))]
-    worst_day_index = [s + w for s, w in zip(solar_potential, wind_potential)].index(min([s + w for s, w in zip(solar_potential, wind_potential)]))
-    worst_day = dates[worst_day_index]
+    worst_day = dates[(np.array(solar_potential) + np.array(wind_potential)).argmin()]
     
     st.markdown(f"""
     - **Best day for solar generation:** {best_solar_day}
     - **Best day for wind generation:** {best_wind_day}
-    - **Energy conservation day:** {worst_day} (lowest combined generation potential)
+    - **Energy conservation day:** {worst_day}
     """)
     
-    # Add a custom conservation plan
     with st.expander("Energy Conservation Plan for Low Generation Days"):
         st.markdown("""
-        1. **Shift non-essential loads** to high-generation days
-        2. **Reduce discretionary energy use** (HVAC settings, etc.)
-        3. **Pre-charge battery** to maximum capacity the day before
-        4. **Prioritize critical loads** with automated load shedding
-        5. **Activate backup systems** if available for extended low-generation periods
+        1. Shift non-essential loads to high-generation days
+        2. Reduce discretionary energy use (HVAC settings, etc.)
+        3. Pre-charge battery to maximum capacity the day before
+        4. Prioritize critical loads with automated load shedding
+        5. Activate backup systems if available
         """)
 
 # Weather alert system
 with st.expander("Weather Alerts and Notifications", expanded=False):
     st.markdown("### Configure Weather Alerts")
     
-    # Weather alert settings
+    # Alert settings
     alert_cols = st.columns(3)
-    
     with alert_cols[0]:
         st.checkbox("High wind alerts (>15 m/s)", value=True)
         st.checkbox("Low irradiance alerts (<100 W/m²)", value=True)
-    
     with alert_cols[1]:
         st.checkbox("Extreme temperature alerts", value=True)
-        st.checkbox("Freezing condition alerts", value=True)
-    
+        st.checkbox("Heavy precipitation alerts", value=True)
     with alert_cols[2]:
-        st.checkbox("Favorable generation condition alerts", value=False)
-        st.checkbox("Daily weather forecast summary", value=True)
+        st.checkbox("Favorable generation alerts", value=False)
+        st.checkbox("Daily forecast summary", value=True)
     
+    # Notification methods
     st.markdown("### Notification Methods")
+    notify_cols = st.columns(3)
+    with notify_cols[0]:
+        st.checkbox("Dashboard alerts", value=True)
+    with notify_cols[1]:
+        email = st.checkbox("Email alerts", value=False)
+        if email:
+            st.text_input("Email address")
+    with notify_cols[2]:
+        sms = st.checkbox("SMS alerts", value=False)
+        if sms:
+            st.text_input("Phone number")
     
-    notification_cols = st.columns(3)
-    
-    with notification_cols[0]:
-        st.checkbox("Dashboard notifications", value=True)
-    
-    with notification_cols[1]:
-        st.checkbox("Email alerts", value=False)
-        st.text_input("Email address")
-    
-    with notification_cols[2]:
-        st.checkbox("SMS alerts (for critical issues only)", value=False)
-        st.text_input("Phone number")
-    
-    # Save settings button
     st.button("Save Alert Settings")

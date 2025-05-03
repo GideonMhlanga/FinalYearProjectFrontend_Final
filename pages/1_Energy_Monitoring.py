@@ -272,7 +272,7 @@ with tab3:
     # Add reference lines for SOC thresholds
     fig.add_shape(
         type="line",
-        x0=historical_data["timestam"].iloc[0],
+        x0=historical_data["timestamp"].iloc[0],
         y0=20,
         x1=historical_data["timestamp"].iloc[-1],
         y1=20,
