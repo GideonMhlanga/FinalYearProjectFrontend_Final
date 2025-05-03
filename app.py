@@ -98,17 +98,17 @@ auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=True)
 
 # Manual refresh button
 if st.sidebar.button("Refresh Now"):
-    st.session_state.last_refresh_time = datetime.now()
+    st.session_state.last_refresh_time = datetime.now(tz)
     st.session_state.current_data = refresh_data()
 
 # Check if we need to refresh based on the time elapsed
 if "last_refresh_time" not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
+    st.session_state.last_refresh_time = datetime.now(tz)
     st.session_state.current_data = refresh_data()
 else:
     elapsed = (datetime.now(tz) - st.session_state.last_refresh_time).total_seconds()
     if auto_refresh and elapsed >= refresh_interval:
-        st.session_state.last_refresh_time = datetime.now()
+        st.session_state.last_refresh_time = datetime.now(tz)
         st.session_state.current_data = refresh_data()
 
 # Get current data
