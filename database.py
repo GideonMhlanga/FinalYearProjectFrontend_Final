@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import and_
 
 # Get database URL from environment variables
-DATABASE_URL = os.environ.get("DATABASE_URL","postgresql://gmhlanga:2001@localhost:5432/frontend_finalproject")
+DATABASE_URL = os.environ.get("DATABASE_URL","postgresql://gmhlanga:gmhlanga.2001@localhost:5432/frontend_finalproject")
 
 # Create SQLAlchemy engine and session
 engine = create_engine(DATABASE_URL)

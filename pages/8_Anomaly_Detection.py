@@ -849,7 +849,7 @@ with tabs[2]:
                 
                 # Format the table data
                 detail_df = timeline_df.copy()
-                detail_df["timestamps"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+                detail_df["timestamp"] = detail_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
                 detail_df["severity"] = detail_df["severity"].str.title()
                 
                 # Reorder and select columns

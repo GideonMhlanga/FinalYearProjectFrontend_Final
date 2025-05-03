@@ -1,8 +1,9 @@
 streamlit==1.32.0
-pandas==2.2.0
+pandas==2.2.3
 numpy==1.26.3
 plotly==5.18.0
 requests==2.31.0
 python-dotenv==1.0.0
-SQLAlchemy==2.0.27
+SQLAlchemy==2.0.40
 python-dateutil==2.8.2 
+psycopg2-binary==2.9.10

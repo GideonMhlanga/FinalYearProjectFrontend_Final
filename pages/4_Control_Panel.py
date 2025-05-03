@@ -346,7 +346,7 @@ with tab3:
     for i in range(10):
         log_type = np.random.choice(log_types, p=log_weights)
         component = np.random.choice(components)
-        timestamps = (datetime.now() - timedelta(minutes=i*15)).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = (datetime.now() - timedelta(minutes=i*15)).strftime("%Y-%m-%d %H:%M:%S")
         
         if log_type == "INFO":
             message = np.random.choice([
@@ -374,7 +374,7 @@ with tab3:
             ])
         
         log_entries.append({
-            "timestamps": timestamps,
+            "timestamp": timestamp,
             "type": log_type,
             "component": component,
             "message": message

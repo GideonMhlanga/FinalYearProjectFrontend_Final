@@ -187,7 +187,7 @@ if maintenance_data:
     
     # Extract data
     health_score = latest_analysis.get("health_score", 0)
-    prediction_date = latest_analysis.get("timestamps", "")
+    prediction_date = latest_analysis.get("timestamp", "")
     failure_date = latest_analysis.get("predicted_failure_date")
     recommendation = latest_analysis.get("recommendation", "No specific recommendations")
     confidence = latest_analysis.get("confidence", 0) * 100  # Convert to percentage
@@ -341,7 +341,7 @@ if maintenance_data:
         # Create DataFrame from historical data
         history_df = pd.DataFrame([
             {
-                "date": item.get("timestamps"),
+                "date": item.get("timestamp"),
                 "health_score": item.get("health_score"),
                 "recommendation": item.get("recommendation"),
                 "confidence": item.get("confidence") * 100 if item.get("confidence") else 0
