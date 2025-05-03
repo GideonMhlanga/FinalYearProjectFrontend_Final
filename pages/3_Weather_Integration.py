@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from utils import get_status_color
 from weather_api import weather_api  # Our new weather API client
@@ -13,6 +13,9 @@ import os
 
 # Load environment variables
 load_dotenv()
+
+# Timezone setup
+tz = pytz.timezone("Africa/Harare")
 
 # Configure the page
 st.set_page_config(
@@ -25,16 +28,13 @@ st.set_page_config(
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
 if "weather_location" not in st.session_state:
-    st.session_state.weather_location = os.getenv("LOCATION", "Harare")
+    st.session_state.weather_location = os.getenv("LOCATION", "Bulawayo")
 if "last_refresh_time" not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
+    st.session_state.last_refresh_time = datetime.now(tz)
 
 # Title and description
 st.title("Zimbabwe Weather Integration")
 st.write("Live Zimbabwe weather data and forecasts to optimize your energy generation")
-
-# Timezone setup
-tz = pytz.timezone("Africa/Harare")
 
 # Function to refresh weather data
 def refresh_weather_data():

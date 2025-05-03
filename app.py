@@ -20,6 +20,10 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
 import os
+import pytz
+
+# Timezone setup
+tz = pytz.timezone("Africa/Harare")
 
 # Import database and utilities
 from database import db
@@ -102,7 +106,7 @@ if "last_refresh_time" not in st.session_state:
     st.session_state.last_refresh_time = datetime.now()
     st.session_state.current_data = refresh_data()
 else:
-    elapsed = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
+    elapsed = (datetime.now(tz) - st.session_state.last_refresh_time).total_seconds()
     if auto_refresh and elapsed >= refresh_interval:
         st.session_state.last_refresh_time = datetime.now()
         st.session_state.current_data = refresh_data()
