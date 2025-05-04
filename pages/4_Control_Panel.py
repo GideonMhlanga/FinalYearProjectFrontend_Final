@@ -43,7 +43,7 @@ elif st.session_state.role != "admin":
 
 # Function to check if data needs refresh
 def should_refresh_data():
-    if st.session_state.control_data.empty:
+    if not st.session_state.control_data:
         return True
     elapsed = (datetime.now(pytz.timezone('Africa/Harare')) - st.session_state.last_refresh_time).total_seconds()
     return elapsed >= st.session_state.refresh_interval
