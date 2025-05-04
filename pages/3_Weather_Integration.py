@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta, timezone
 import time
 from utils import get_status_color
-from weather_api import weather_api  # Our new weather API client
+from weather_apis import weather_api  # Our new weather API client
 from dotenv import load_dotenv
 import pytz
 import os

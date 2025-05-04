@@ -5,8 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
+import pytz
 from data_generator import data_generator
 from utils import format_power, get_status_color
+from weather_apis import weather_api
 
 # Configure the page
 st.set_page_config(
@@ -18,6 +20,14 @@ st.set_page_config(
 # Initialize session state for theme if it doesn't exist
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
+
+# Initialize session state variables if they don't exist
+if 'last_refresh_time' not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+if 'refresh_interval' not in st.session_state:
+    st.session_state.refresh_interval = 300  # 5 minutes in seconds
+if 'control_data' not in st.session_state:
+    st.session_state.control_data = pd.DataFrame()
 
 # Title and description
 st.title("System Control Panel")
@@ -31,9 +41,26 @@ elif st.session_state.role != "admin":
     st.error("You need administrator privileges to access this page.")
     st.stop()
 
+# Function to check if data needs refresh
+def should_refresh_data():
+    if st.session_state.control_data.empty:
+        return True
+    elapsed = (datetime.now(pytz.timezone('Africa/Harare')) - st.session_state.last_refresh_time).total_seconds()
+    return elapsed >= st.session_state.refresh_interval
+
 # Function to refresh data
 def refresh_data():
-    return data_generator.generate_current_data()
+    current_data = data_generator.generate_current_data()
+    st.session_state.control_data = {
+        "solar_power": current_data["solar_power"],
+        "wind_power": current_data["wind_power"],
+        "total_generation": current_data["total_generation"],
+        "load": current_data["load"],
+        "battery": current_data["battery"],
+        "net_power": current_data["net_power"],
+        "alerts": current_data["alerts"]
+    }
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
 
 # Auto-refresh checkbox
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=True)
@@ -43,21 +70,15 @@ refresh_interval = st.sidebar.slider("Auto-refresh interval (sec)", 5, 60, 15)
 
 # Manual refresh button
 if st.sidebar.button("Refresh Now"):
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+    refresh_data()
 
-# Check if we need to refresh based on the time elapsed
-if "last_refresh_time" not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
-else:
-    elapsed = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
-    if auto_refresh and elapsed >= refresh_interval:
-        st.session_state.last_refresh_time = datetime.now()
-        st.session_state.current_data = refresh_data()
+# Refresh data if needed
+if should_refresh_data():
+    refresh_data()
 
 # Get current data
-current_data = st.session_state.current_data
+control_data = st.session_state.control_data
 last_refresh = st.session_state.last_refresh_time
 
 # Get current settings
@@ -114,12 +135,12 @@ with tab1:
         st.subheader("Current System Mode")
         
         # Calculate current power flow
-        solar_power = current_data["solar_power"]
-        wind_power = current_data["wind_power"]
-        total_generation = current_data["total_generation"]
-        load = current_data["load"]
-        battery = current_data["battery"]
-        net_power = current_data["net_power"]
+        solar_power = control_data["solar_power"]
+        wind_power = control_data["wind_power"]
+        total_generation = control_data["total_generation"]
+        load = control_data["load"]
+        battery = control_data["battery"]
+        net_power = control_data["net_power"]
         
         # Create Sankey diagram for power flow
         label_names = ["Solar", "Wind", "Battery", "Loads"]
@@ -281,7 +302,7 @@ with tab3:
     components = [
         {"name": "Solar Array", "status": "Online", "health": 98, "last_maintenance": "2023-04-15"},
         {"name": "Wind Turbine", "status": "Online", "health": 95, "last_maintenance": "2023-03-22"},
-        {"name": "Battery Bank", "status": "Online", "health": current_data["battery"]["health_pct"], "last_maintenance": "2023-05-10"},
+        {"name": "Battery Bank", "status": "Online", "health": control_data["battery"]["health_pct"], "last_maintenance": "2023-05-10"},
         {"name": "Charge Controller", "status": "Online", "health": 99, "last_maintenance": "2023-02-28"},
         {"name": "Main Inverter", "status": "Online", "health": 97, "last_maintenance": "2023-04-02"},
         {"name": "Control System", "status": "Online", "health": 100, "last_maintenance": "2023-05-20"},
@@ -320,7 +341,7 @@ with tab3:
     # System alerts
     st.subheader("Active System Alerts")
     
-    alerts = current_data.get("alerts", [])
+    alerts = control_data.get("alerts", [])
     if alerts:
         for alert in alerts:
             severity = alert["severity"]
@@ -346,7 +367,7 @@ with tab3:
     for i in range(10):
         log_type = np.random.choice(log_types, p=log_weights)
         component = np.random.choice(components)
-        timestamp = (datetime.now() - timedelta(minutes=i*15)).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = (datetime.now(pytz.timezone('Africa/Harare')) - timedelta(minutes=i*15)).strftime("%Y-%m-%d %H:%M:%S")
         
         if log_type == "INFO":
             message = np.random.choice([

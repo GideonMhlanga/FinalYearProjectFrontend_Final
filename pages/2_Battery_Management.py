@@ -5,8 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
+import pytz
 from data_generator import data_generator
 from utils import get_status_color
+from weather_apis import weather_api
 
 # Configure the page
 st.set_page_config(
@@ -19,13 +21,30 @@ st.set_page_config(
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
 
+# Initialize session state variables if they don't exist
+if 'last_refresh_time' not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+if 'refresh_interval' not in st.session_state:
+    st.session_state.refresh_interval = 300  # 5 minutes in seconds
+if 'battery_data' not in st.session_state:
+    st.session_state.battery_data = pd.DataFrame()
+
 # Title and description
 st.title("Battery Management")
 st.write("Monitor and manage your battery system performance and health")
 
+# Function to check if data needs refresh
+def should_refresh_data():
+    if st.session_state.battery_data.empty:
+        return True
+    elapsed = (datetime.now(pytz.timezone('Africa/Harare')) - st.session_state.last_refresh_time).total_seconds()
+    return elapsed >= st.session_state.refresh_interval
+
 # Function to refresh data
 def refresh_data():
-    return data_generator.generate_current_data()
+    current_data = data_generator.generate_current_data()
+    st.session_state.battery_data = current_data["battery"]
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
 
 # Auto-refresh checkbox
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=True)
@@ -35,22 +54,15 @@ refresh_interval = st.sidebar.slider("Auto-refresh interval (sec)", 5, 60, 15)
 
 # Manual refresh button
 if st.sidebar.button("Refresh Now"):
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
+    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+    refresh_data()
 
-# Check if we need to refresh based on the time elapsed
-if "last_refresh_time" not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.current_data = refresh_data()
-else:
-    elapsed = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
-    if auto_refresh and elapsed >= refresh_interval:
-        st.session_state.last_refresh_time = datetime.now()
-        st.session_state.current_data = refresh_data()
+# Refresh data if needed
+if should_refresh_data():
+    refresh_data()
 
 # Get current data
-current_data = st.session_state.current_data
-battery_data = current_data["battery"]
+battery_data = st.session_state.battery_data
 last_refresh = st.session_state.last_refresh_time
 
 # Display last refresh time
