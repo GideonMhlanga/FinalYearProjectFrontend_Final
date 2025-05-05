@@ -6,10 +6,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta, timezone
 import time
 from utils import get_status_color
-from weather_apis import weather_api  # Our new weather API client
+from weather_api_new import weather_api  # Our new weather API client
 from dotenv import load_dotenv
 import pytz
 import os
+import logging
 
 # Load environment variables
 load_dotenv()
@@ -86,7 +87,7 @@ st.subheader("Current Weather Conditions")
 col1, col2, col3 = st.columns(3)
 
 # Solar irradiance
-irradiance = current_weather.irradiance
+irradiance = current_weather['irradiance']
 irradiance_color = get_status_color(irradiance, {"green": (600, float('inf')), "yellow": (200, 600), "red": (0, 200)})
 
 with col1:
@@ -106,7 +107,7 @@ with col1:
                 }}
             </p>
             <p style="margin:0; font-size: 0.8em;">
-                {current_weather.conditions} ({current_weather.description})
+                {current_weather['conditions']} ({current_weather['description']})
             </p>
         </div>
         """, 
@@ -114,7 +115,7 @@ with col1:
     )
 
 # Wind speed
-wind_speed = current_weather.wind_speed
+wind_speed = current_weather['wind_speed']
 wind_color = get_status_color(wind_speed, {"green": (4, float('inf')), "yellow": (2, 4), "red": (0, 2)})
 
 with col2:
@@ -134,7 +135,7 @@ with col2:
                 }}
             </p>
             <p style="margin:0; font-size: 0.8em;">
-                Direction: {current_weather.wind_direction or 'N/A'}°
+                Direction: {current_weather['wind_direction'] or 'N/A'}°
             </p>
         </div>
         """, 
@@ -142,7 +143,7 @@ with col2:
     )
 
 # Temperature
-temperature = current_weather.temperature
+temperature = current_weather['temperature']
 temp_color = get_status_color(temperature, {"green": (15, 25), "yellow": (5, 15), "red": (25, 45)})
 
 with col3:
@@ -161,7 +162,7 @@ with col3:
                 }}
             </p>
             <p style="margin:0; font-size: 0.8em;">
-                Feels like: {current_weather.feels_like:.1f}°C
+                Feels like: {current_weather['feels_like']:.1f}°C
             </p>
         </div>
         """, 
@@ -213,37 +214,83 @@ icon_mapping = {
     "Mist": "🌫️"
 }
 
+# Function to create a weather card
+def create_weather_card(day):
+    """Create a weather card for a single day."""
+    try:
+        # Get weather icon based on conditions
+        icon = icon_mapping.get(day['conditions'], "🌤️")
+        
+        # Set background color based on day of week
+        day_colors = {
+            "Sunday": "#fff9e6" if st.session_state.theme == "light" else "#332e1f",
+            "Monday": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
+            "Tuesday": "#e6ffe6" if st.session_state.theme == "light" else "#1a331a",
+            "Wednesday": "#fff0e6" if st.session_state.theme == "light" else "#33261f",
+            "Thursday": "#f0e6ff" if st.session_state.theme == "light" else "#261f33",
+            "Friday": "#ffe6e6" if st.session_state.theme == "light" else "#331f1f",
+            "Saturday": "#e6e6ff" if st.session_state.theme == "light" else "#1f1f33"
+        }
+        
+        bg_color = day_colors.get(day['day_name'], "#f5f5f5" if st.session_state.theme == "light" else "#2d2d2d")
+        
+        # Format temperature with proper error handling
+        temp = day.get('temperature', 0)
+        temp_high = day.get('temp_high', temp + 5)
+        temp_low = day.get('temp_low', temp - 5)
+        
+        # Format irradiance with proper error handling
+        irradiance = day.get('irradiance', 0)
+        irradiance_text = f"{irradiance:.0f} W/m²" if irradiance > 0 else "0 W/m²"
+        
+        # Create the card
+        card = f"""
+        <div style="position: relative; padding: 15px; border-radius: 10px; background-color: {bg_color}; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <h3 style="margin:0; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{day['day_name']}</h3>
+            <p style="margin:0; font-size: 0.8em; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">{day['date']}</p>
+            <h1 style="margin:10px 0; font-size: 2.5em;">{icon}</h1>
+            <h3 style="margin:5px 0; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{day['conditions']}</h3>
+            <p style="margin:5px 0; font-size: 0.9em; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">{day['description']}</p>
+            <p style="margin:5px 0; font-size: 1.2em; font-weight: bold; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{temp:.1f}°C</p>
+            <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">{temp_low:.1f}°C - {temp_high:.1f}°C</p>
+            <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">Solar: {irradiance_text}</p>
+            <div style="margin-top: 10px; padding: 8px; border-radius: 5px; background-color: rgba(0,0,0,0.05);">
+                <p style="margin:3px 0; font-size: 0.9em;">Wind: {day['wind_speed']:.1f} m/s</p>
+                <p style="margin:3px 0; font-size: 0.9em;">Clouds: {day['cloud_cover']:.0f}%</p>
+                <p style="margin:3px 0; font-size: 0.9em;">Rain: {day['rain_probability']*100:.0f}%</p>
+            </div>
+            <div style="margin-top: 8px; padding: 8px; border-radius: 5px; background-color: rgba(0,0,0,0.05);">
+                <p style="margin:3px 0; font-size: 0.9em;">Solar Potential: <span style="color: {'green' if day['solar_potential'] == 'High' else 'orange' if day['solar_potential'] == 'Medium' else 'red'}">{day['solar_potential']}</span></p>
+                <p style="margin:3px 0; font-size: 0.9em;">Wind Potential: <span style="color: {'green' if day['wind_potential'] == 'High' else 'orange' if day['wind_potential'] == 'Medium' else 'red'}">{day['wind_potential']}</span></p>
+            </div>
+        </div>
+        """
+        return card
+    except Exception as e:
+        logging.error(f"Error creating weather card: {str(e)}")
+        return ""
+
+# Check if API is working
+is_api_working = True
+try:
+    test_data = weather_api.get_current_weather()
+    if not test_data:
+        is_api_working = False
+except Exception as e:
+    is_api_working = False
+    logging.error(f"API test failed: {str(e)}")
+
+# Display API status
+if not is_api_working:
+    st.error("⚠️ Weather API is currently offline. Displaying simulated data.")
+
+# Create forecast cards
+forecast_cols = st.columns(len(forecast))
+
 for i, day in enumerate(forecast):
     with forecast_cols[i]:
-        icon = icon_mapping.get(day.conditions, "🌤️")
-        
-        # Set background color based on conditions
-        bg_color = {
-            "Clear": "#fff9e6" if st.session_state.theme == "light" else "#332e1f",
-            "Clouds": "#f0f0f0" if st.session_state.theme == "light" else "#2a2a2a",
-            "Rain": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
-            "Drizzle": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
-            "Thunderstorm": "#ffebee" if st.session_state.theme == "light" else "#330000",
-        }.get(day.conditions, "#f5f5f5" if st.session_state.theme == "light" else "#2d2d2d")
-        
-        st.markdown(
-            f"""
-            <div style="padding: 10px; border-radius: 5px; background-color: {bg_color}; text-align: center;">
-                <h3 style="margin:0;">{day.day_name}</h3>
-                <p style="margin:0; font-size: 0.8em;">{day.date}</p>
-                <h1 style="margin:5px 0; font-size: 2.5em;">{icon}</h1>
-                <h3 style="margin:0;">{day.conditions}</h3>
-                <p style="margin:5px 0;">{day.temp_high:.1f}°C / {day.temp_low:.1f}°C</p>
-                <p style="margin:0;">Wind: {day.wind_speed:.1f} m/s</p>
-                <div style="margin-top: 10px; padding: 5px; border-radius: 3px; background-color: rgba(0,0,0,0.05);">
-                    <p style="margin:0; font-weight: bold;">Energy Forecast</p>
-                    <p style="margin:0;">Solar: <span style="color: {'green' if day.solar_potential == 'High' else 'orange' if day.solar_potential == 'Medium' else 'red'}">{day.solar_potential}</span></p>
-                    <p style="margin:0;">Wind: <span style="color: {'green' if day.wind_potential == 'High' else 'orange' if day.wind_potential == 'Medium' else 'red'}">{day.wind_potential}</span></p>
-                </div>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+        card = create_weather_card(day)
+        st.markdown(card, unsafe_allow_html=True)
 
 # Weather impact on energy generation
 st.subheader("Weather Impact on Energy Generation")
@@ -263,16 +310,16 @@ def generate_historical_data(current, forecast):
         wind_variation = np.random.normal(0, 1)
         cloud_variation = np.random.normal(0, 10)
         
-        temp = current.temperature + temp_variation
-        wind = current.wind_speed + wind_variation
-        clouds = current.cloud_cover + cloud_variation
+        temp = current['temperature'] + temp_variation
+        wind = current['wind_speed'] + wind_variation
+        clouds = current['cloud_cover'] + cloud_variation
         
         # Ensure realistic ranges
         temp = max(min(temp, 40), -5)
         wind = max(min(wind, 20), 0)
         clouds = max(min(clouds, 100), 0)
         
-        is_day = current.sunrise.time() <= date.time() <= current.sunset.time()
+        is_day = current['sunrise'].time() <= date.time() <= current['sunset'].time()
         irradiance = weather_api._calculate_irradiance(clouds, is_day) if is_day else 0
         
         data.append({
@@ -435,9 +482,9 @@ with opt_col2:
     st.markdown("### 5-Day Energy Forecast")
     
     # Prepare data for chart
-    dates = [day.date for day in forecast]
-    solar_potential = [100 if day.solar_potential == "High" else 60 if day.solar_potential == "Medium" else 30 for day in forecast]
-    wind_potential = [100 if day.wind_potential == "High" else 60 if day.wind_potential == "Medium" else 30 for day in forecast]
+    dates = [day['date'] for day in forecast]
+    solar_potential = [100 if day['solar_potential'] == "High" else 60 if day['solar_potential'] == "Medium" else 30 for day in forecast]
+    wind_potential = [100 if day['wind_potential'] == "High" else 60 if day['wind_potential'] == "Medium" else 30 for day in forecast]
     
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -517,3 +564,82 @@ with st.expander("Weather Alerts and Notifications", expanded=False):
             st.text_input("Phone number")
     
     st.button("Save Alert Settings")
+
+# Add auto-refresh functionality
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = datetime.now(pytz.timezone('Africa/Harare'))
+
+# Function to check if we should refresh the data
+def should_refresh():
+    elapsed = (datetime.now(pytz.timezone('Africa/Harare')) - st.session_state.last_refresh).total_seconds()
+    return elapsed >= 300  # Refresh every 5 minutes
+
+# Get current weather data
+current_weather = weather_api.get_current_weather()
+
+# Create three columns for current conditions
+col1, col2, col3 = st.columns(3)
+
+# Current Weather Card
+with col1:
+    st.markdown(f"""
+    <div style="padding: 15px; border-radius: 10px; background-color: {'#fff9e6' if st.session_state.theme == 'light' else '#332e1f'}; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h3 style="margin:0; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">Current Weather</h3>
+        <h1 style="margin:10px 0; font-size: 2.5em;">{icon_mapping.get(current_weather['conditions'], '🌤️')}</h1>
+        <p style="margin:5px 0; font-size: 1.2em; font-weight: bold; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{current_weather['temperature']:.1f}°C</p>
+        <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">{current_weather['conditions']}</p>
+        <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">{current_weather['description']}</p>
+        <div style="margin-top: 10px; padding: 8px; border-radius: 5px; background-color: rgba(0,0,0,0.05);">
+            <p style="margin:3px 0; font-size: 0.9em;">Wind: {current_weather['wind_speed']:.1f} m/s</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Clouds: {current_weather['cloud_cover']:.0f}%</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Humidity: {current_weather['humidity']:.0f}%</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Solar Irradiance Card
+with col2:
+    st.markdown(f"""
+    <div style="padding: 15px; border-radius: 10px; background-color: {'#fff9e6' if st.session_state.theme == 'light' else '#332e1f'}; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h3 style="margin:0; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">Solar Irradiance</h3>
+        <h1 style="margin:10px 0; font-size: 2.5em;">☀️</h1>
+        <p style="margin:5px 0; font-size: 1.2em; font-weight: bold; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{current_weather['irradiance']:.0f} W/m²</p>
+        <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">Solar Potential: {current_weather['solar_potential']}</p>
+        <div style="margin-top: 10px; padding: 8px; border-radius: 5px; background-color: rgba(0,0,0,0.05);">
+            <p style="margin:3px 0; font-size: 0.9em;">Cloud Cover: {current_weather['cloud_cover']:.0f}%</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Time: {current_weather['timestamp'].strftime('%H:%M')}</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Last Updated: {st.session_state.last_refresh.strftime('%H:%M:%S')}</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Wind Conditions Card
+with col3:
+    st.markdown(f"""
+    <div style="padding: 15px; border-radius: 10px; background-color: {'#fff9e6' if st.session_state.theme == 'light' else '#332e1f'}; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h3 style="margin:0; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">Wind Conditions</h3>
+        <h1 style="margin:10px 0; font-size: 2.5em;">💨</h1>
+        <p style="margin:5px 0; font-size: 1.2em; font-weight: bold; color: {'#333' if st.session_state.theme == 'light' else '#fff'};">{current_weather['wind_speed']:.1f} m/s</p>
+        <p style="margin:5px 0; color: {'#666' if st.session_state.theme == 'light' else '#ccc'};">Direction: {current_weather['wind_direction']:.0f}°</p>
+        <div style="margin-top: 10px; padding: 8px; border-radius: 5px; background-color: rgba(0,0,0,0.05);">
+            <p style="margin:3px 0; font-size: 0.9em;">Wind Potential: {current_weather['wind_potential']}</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Pressure: {current_weather['pressure']:.0f} hPa</p>
+            <p style="margin:3px 0; font-size: 0.9em;">Last Updated: {st.session_state.last_refresh.strftime('%H:%M:%S')}</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Add auto-refresh button
+if st.button("Refresh Now", key="refresh_weather_button"):
+    st.session_state.last_refresh = datetime.now(pytz.timezone('Africa/Harare'))
+    st.experimental_rerun()
+
+# Add auto-refresh using JavaScript
+st.markdown("""
+<script>
+    // Auto-refresh the page every 5 minutes
+    setTimeout(function() {
+        window.location.reload();
+    }, 300000);  // 300000 ms = 5 minutes
+</script>
+""", unsafe_allow_html=True)

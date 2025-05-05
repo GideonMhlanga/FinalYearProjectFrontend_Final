@@ -8,7 +8,7 @@ import time
 import pytz
 from data_generator import data_generator
 from utils import get_status_color
-from weather_apis import weather_api
+from weather_api_new import weather_api
 
 # Configure the page
 st.set_page_config(

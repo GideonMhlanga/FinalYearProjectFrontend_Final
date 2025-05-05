@@ -13,7 +13,7 @@ from utils import (
     get_system_alerts
 )
 from database import db
-from weather_apis import weather_apis
+from weather_api_new import weather_apis
 
 class DataGenerator:
     """
