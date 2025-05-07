@@ -41,6 +41,32 @@ class WeatherAPI:
         self.last_request_time = datetime.now(pytz.timezone('Africa/Harare'))
         self.min_request_interval = 1.0  # Minimum seconds between requests
 
+    def _calculate_irradiance(self, cloud_cover: float, is_day: bool) -> float:
+        """Calculate solar irradiance based on cloud cover and time of day.
+        
+        Args:
+            cloud_cover (float): Cloud cover percentage (0-100)
+            is_day (bool): Whether it's daytime
+            
+        Returns:
+            float: Estimated solar irradiance in W/m²
+        """
+        if not is_day:
+            return 0.0
+            
+        # Base irradiance for clear sky (1000 W/m²)
+        base_irradiance = 1000.0
+        
+        # Calculate cloud attenuation factor (0-1)
+        # More clouds = less irradiance
+        cloud_factor = 1.0 - (cloud_cover / 100.0)
+        
+        # Calculate final irradiance
+        irradiance = base_irradiance * cloud_factor
+        
+        # Ensure non-negative value
+        return max(0.0, irradiance)
+
     def get_available_locations(self) -> list:
         """Get list of available locations for weather data."""
         return self.available_locations
@@ -284,6 +310,18 @@ class WeatherAPI:
 weather_api = WeatherAPI()
 weather_apis = weather_api  # For backward compatibility 
 
+def get_day_colors(theme="light"):
+    """Get color mapping for days based on theme."""
+    return {
+        "Sunday": "#fff9e6" if theme == "light" else "#332e1f",
+        "Monday": "#e6f2ff" if theme == "light" else "#1a2833",
+        "Tuesday": "#e6ffe6" if theme == "light" else "#1a331a",
+        "Wednesday": "#fff0e6" if theme == "light" else "#33261f",
+        "Thursday": "#f0e6ff" if theme == "light" else "#261f33",
+        "Friday": "#ffe6e6" if theme == "light" else "#331f1f",
+        "Saturday": "#e6e6ff" if theme == "light" else "#1f1f33"
+    }
+
 # Check if API is working
 is_api_working = True
 try:
@@ -297,16 +335,6 @@ except Exception as e:
 # Display API status
 if not is_api_working:
     st.error("⚠️ Weather API is currently offline. Displaying simulated data.")
-
-day_colors = {
-    "Sunday": "#fff9e6" if st.session_state.theme == "light" else "#332e1f",
-    "Monday": "#e6f2ff" if st.session_state.theme == "light" else "#1a2833",
-    "Tuesday": "#e6ffe6" if st.session_state.theme == "light" else "#1a331a",
-    "Wednesday": "#fff0e6" if st.session_state.theme == "light" else "#33261f",
-    "Thursday": "#f0e6ff" if st.session_state.theme == "light" else "#261f33",
-    "Friday": "#ffe6e6" if st.session_state.theme == "light" else "#331f1f",
-    "Saturday": "#e6e6ff" if st.session_state.theme == "light" else "#1f1f33"
-}
 
 # HTML/CSS styling should be in a separate file or Streamlit components
 st.markdown("""

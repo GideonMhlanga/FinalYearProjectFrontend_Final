@@ -315,7 +315,7 @@ class DataGenerator:
         Returns:
             List of forecast dictionaries
         """
-        from weather_api import zimbabwe_weather
+        from weather_api_new import zimbabwe_weather
         return zimbabwe_weather.get_forecast(location)
     
     def authenticate_user(self, username, password):

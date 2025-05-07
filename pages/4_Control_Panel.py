@@ -1,4 +1,12 @@
 import streamlit as st
+
+# Configure the page
+st.set_page_config(
+    page_title="Control Panel | Solar-Wind Hybrid Monitor",
+    page_icon="🎛️",
+    layout="wide"
+)
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -9,13 +17,6 @@ import pytz
 from data_generator import data_generator
 from utils import format_power, get_status_color
 from weather_apis import weather_api
-
-# Configure the page
-st.set_page_config(
-    page_title="Control Panel | Solar-Wind Hybrid Monitor",
-    page_icon="🎛️",
-    layout="wide"
-)
 
 # Initialize session state for theme if it doesn't exist
 if "theme" not in st.session_state:
