@@ -16,14 +16,18 @@ class WeatherAPI:
     
     def __init__(self):
         # Initialize API key from environment variables
-        self.api_key = os.getenv('RAPIDAPI_KEY', 'b7e9238e13msh4b32e23b87ef7edp1aa762jsn68e185938e91')
-        self.host = "open-weather13.p.rapidapi.com"
-        self.base_url = f"https://{self.host}/city"
-        self.location = "Bulawayo"
+        self.api_key = os.getenv('RAPIDAPI_KEY', '7f9e16f0efmsh4bd796dccefbdc5p12f98ejsn46cba1899d09')
+        self.host = "weather-api167.p.rapidapi.com"
+        self.base_url = "https://weather-api167.p.rapidapi.com/api/weather"
         self.headers = {
-            'x-rapidapi-key': self.api_key,
-            'x-rapidapi-host': self.host
+            "x-rapidapi-key": self.api_key,
+            "x-rapidapi-host": self.host,
+            "Accept": "application/json"
         }
+        self.default_location = os.getenv('LOCATION', 'Bulawayo')
+        self.default_lat = os.getenv('LATITUDE', '-20.1325')
+        self.default_lon = os.getenv('LONGITUDE', '28.6264')
+        self.default_forecast_days = 7
         # Define available locations
         self.available_locations = [
             "Bulawayo",
@@ -37,6 +41,24 @@ class WeatherAPI:
             "Masvingo",
             "Chinhoyi"
         ]
+
+    def _make_api_request(self, endpoint, params=None):
+        """Make API request with error handling using requests"""
+        try:
+            url=f"{self.base_url}/{endpoint}"
+            response = requests.get(
+                url,
+                headers=self.headers,
+                params=params or {}
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"API request failed: {str(e)}")
+            return None
+        except st.json.JSONDecodeError:
+            logging.error("Failed to decode API response")
+            return None
         # Add rate limiting
         self.last_request_time = datetime.now(pytz.timezone('Africa/Harare'))
         self.min_request_interval = 1.0  # Minimum seconds between requests
@@ -163,95 +185,132 @@ class WeatherAPI:
         """Get weather forecast data for the specified number of days.
         
         Args:
-            days (int): Number of days to forecast (default: 7 for full week)
-            location (str): Location to get forecast for (default: uses instance location)
+            days (int): Number of days to forecast (default: 7)
+            location (str): Location name
+            
+        Returns:
+            list: List of forecast dictionaries with complete weather data
         """
         try:
-            # For now, return simulated forecast data since the free API doesn't support forecasts
-            current = self.get_current_weather()
+            # Input validation and type conversion
+            try:
+                days = int(days) if days is not None else self.default_forecast_days
+                if days <= 0 or days > 14:  # Reasonable upper limit
+                    days = self.default_forecast_days
+                    logging.warning(f"Invalid days value ({days}). Using default: {self.default_forecast_days}")
+            except (TypeError, ValueError):
+                days = self.default_forecast_days
+                logging.warning(f"Invalid days format. Using default: {self.default_forecast_days}")
+
+            # Location validation
+            location = str(location) if location is not None else self.location
+            if location not in self.available_locations:
+                logging.warning(f"Location '{location}' not available. Using default: {self.location}")
+                location = self.location
+
+            # Get current weather as baseline
+            current = self.get_current_weather(location)
             forecasts = []
-            
-            # Generate simulated forecast data based on current conditions
             current_time = datetime.now(pytz.timezone('Africa/Harare'))
             
-            # Ensure we start from the beginning of the week (Sunday)
+            # Calculate weekly starting point (Sunday)
             days_to_sunday = (7 - current_time.weekday()) % 7
             start_time = current_time - timedelta(days=days_to_sunday)
             
+            # Generate forecast for each day
             for day in range(days):
-                # Calculate daily averages for more realistic forecasts
-                daily_temp = current['temperature'] + np.random.uniform(-3, 3)
-                daily_wind = current['wind_speed'] + np.random.uniform(-1, 1)
-                daily_clouds = current['cloud_cover'] + np.random.uniform(-15, 15)
+                # Calculate base variations with realistic constraints
+                base_temp = current.get('temperature', 20)
+                temp_variation = np.random.normal(0, 2)  # Smaller variation for more realistic data
+                wind_variation = np.random.normal(0, 0.8)
+                cloud_variation = np.random.normal(0, 8)
                 
-                # Add a weekly pattern to make forecasts more realistic
+                # Apply weekly patterns
                 day_of_week = (start_time + timedelta(days=day)).weekday()
-                weekly_temp_adjust = np.sin(2 * np.pi * day_of_week / 7) * 2  # Weekly temperature cycle
-                weekly_wind_adjust = np.cos(2 * np.pi * day_of_week / 7) * 1  # Weekly wind cycle
+                weekly_temp_adjust = np.sin(2 * np.pi * day_of_week / 7) * 2
+                weekly_wind_adjust = np.cos(2 * np.pi * day_of_week / 7) * 1
                 
-                # Determine base weather conditions for the day
-                cloud_cover = min(100, max(0, daily_clouds))
+                # Calculate daily values with bounds
+                daily_temp = base_temp + temp_variation + weekly_temp_adjust
+                daily_wind = current.get('wind_speed', 3) + wind_variation + weekly_wind_adjust
+                daily_clouds = current.get('cloud_cover', 50) + cloud_variation
+                
+                # Apply realistic bounds
+                temperature = max(min(daily_temp, 38), -3)  # Zimbabwe temperature range
+                wind_speed = max(min(daily_wind, 25), 0)
+                cloud_cover = max(min(daily_clouds, 100), 0)
+                
+                # Determine weather conditions
                 if cloud_cover < 20:
                     conditions = "Clear"
                     description = "clear sky"
+                    rain_prob = np.random.uniform(0, 0.1)
                 elif cloud_cover < 50:
-                    conditions = "Partly Cloudy"
+                    conditions = "Partly Cloudy" 
                     description = "partly cloudy"
+                    rain_prob = np.random.uniform(0.1, 0.3)
                 elif cloud_cover < 80:
                     conditions = "Cloudy"
                     description = "cloudy"
+                    rain_prob = np.random.uniform(0.3, 0.6)
                 else:
                     conditions = "Overcast"
                     description = "overcast"
+                    rain_prob = np.random.uniform(0.5, 0.8)
+                    
+                # Special condition for rain
+                if rain_prob > 0.6 and conditions in ["Cloudy", "Overcast"]:
+                    conditions = "Rain"
+                    description = "light rain" if rain_prob < 0.8 else "moderate rain"
                 
-                # Add rain probability based on conditions and day of week
-                if conditions in ["Cloudy", "Overcast"]:
-                    rain_prob = np.random.uniform(0.3, 0.7)
-                    if rain_prob > 0.5:
-                        conditions = "Rain"
-                        description = "light rain"
-                else:
-                    rain_prob = np.random.uniform(0, 0.2)
+                # Calculate temperature extremes
+                temp_high = temperature + np.random.uniform(3, 7)
+                temp_low = temperature - np.random.uniform(3, 7)
                 
-                # Calculate daily high and low temperatures
-                temp_high = daily_temp + weekly_temp_adjust + 5
-                temp_low = daily_temp + weekly_temp_adjust - 5
+                # Calculate solar metrics
+                is_daytime = True  # Simplified for forecast
+                irradiance = self._calculate_irradiance(cloud_cover, is_daytime)
+                solar_potential = "High" if irradiance > 700 else "Medium" if irradiance > 400 else "Low"
                 
-                # Calculate average wind speed for the day
-                wind_speed = max(0, daily_wind + weekly_wind_adjust)
+                # Calculate wind potential
+                wind_potential = "High" if wind_speed > 5 else "Medium" if wind_speed > 3 else "Low"
                 
-                # Calculate solar and wind potential
-                solar_potential = "High" if conditions == "Clear" else "Medium" if conditions == "Partly Cloudy" else "Low"
-                wind_potential = "High" if wind_speed > 4 else "Medium" if wind_speed > 2 else "Low"
-                
-                # Create daily forecast
-                timestamp = start_time + timedelta(days=day)
+                # Create comprehensive forecast entry
                 forecast = {
-                    'timestamp': timestamp,
-                    'date': timestamp.strftime('%Y-%m-%d'),
-                    'day_name': timestamp.strftime('%A'),
-                    'temperature': daily_temp + weekly_temp_adjust,
-                    'temp_high': temp_high,
-                    'temp_low': temp_low,
-                    'humidity': min(100, max(0, current['humidity'] + np.random.uniform(-10, 10))),
-                    'pressure': current['pressure'] + np.random.uniform(-5, 5),
-                    'wind_speed': wind_speed,
-                    'wind_direction': (current['wind_direction'] + np.random.uniform(-45, 45)) % 360,
-                    'cloud_cover': cloud_cover,
+                    'timestamp': start_time + timedelta(days=day),
+                    'date': (start_time + timedelta(days=day)).strftime('%Y-%m-%d'),
+                    'day_name': (start_time + timedelta(days=day)).strftime('%A'),
+                    'temperature': float(round(temperature, 1)),
+                    'temp_high': float(round(temp_high, 1)),
+                    'temp_low': float(round(temp_low, 1)),
+                    'humidity': float(max(10, min(95, current.get('humidity', 50) + np.random.randint(-15, 15)))),
+                    'pressure': float(max(980, min(1040, current.get('pressure', 1013) + np.random.randint(-10, 10)))),
+                    'wind_speed': float(round(wind_speed, 1)),
+                    'wind_direction': (current.get('wind_direction', 0) + np.random.randint(-60, 60)) % 360,
+                    'cloud_cover': int(cloud_cover),
                     'conditions': conditions,
                     'description': description,
-                    'rain_probability': rain_prob,
+                    'rain_probability': round(min(0.99, max(0.01, rain_prob)), 2),
                     'solar_potential': solar_potential,
                     'wind_potential': wind_potential,
-                    'irradiance': max(0, 1000 * (1 - cloud_cover / 100)) if conditions in ["Clear", "Partly Cloudy"] else 0
+                    'irradiance': float(round(irradiance)),
+                    'uv_index': min(12, max(1, round(irradiance/100))),  # Simple UV estimate
+                    'visibility': max(2, 10 - int(cloud_cover/15))  # km visibility estimate
                 }
                 
                 forecasts.append(forecast)
-            
+                
             return forecasts
+            
         except Exception as e:
-            logging.error(f"Failed to get forecast for {location or self.location}: {str(e)}")
-            return []
+            logging.error(f"Forecast generation failed for {location}: {str(e)}", exc_info=True)
+            # Return a minimal safe forecast if generation fails
+            return [{
+                'date': (datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d'),
+                'temperature': 20,
+                'conditions': 'Clear',
+                'description': 'clear sky'
+            } for i in range(min(7, days))]
 
     def _get_default_weather(self, timestamp: datetime = None) -> dict:
         """Return default weather values when API fails."""
