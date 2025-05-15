@@ -13,7 +13,7 @@ from utils import (
     get_system_alerts
 )
 from database import db
-from weather_api_new import weather_apis
+from weather_api_new import WeatherAPI
 
 class DataGenerator:
     """
@@ -47,33 +47,64 @@ class DataGenerator:
         }
         self.last_battery_soc = None
         self.alerts = []
+        self.weather_api = WeatherAPI()
         
     def generate_current_data(self):
         """Generate a snapshot of current system data"""
         current_time = datetime.datetime.now()
         
+        # Initialize with default values matching weather integration structure
+        weather_data = {
+            'current': {
+                'irradiance': 500,
+                'wind_speed': 5.0,
+                'wind_direction': 0,
+                'temperature': 25.0,
+                'humidity': 50.0,
+                'pressure': 1013.0,
+                'conditions': 'Clear',
+                'description': 'Clear sky',
+                'cloud_cover': 0,
+                'solar_potential': 'Medium',
+                'wind_potential': 'Medium'
+            }
+        }
+        
         try:
-            # Get real-time solar irradiance data
-            solar_data = weather_apis.get_solar_irradiance(current_time)
-            irradiance = solar_data['ghi']  # Using Global Horizontal Irradiance
+            # Get real-time weather data
+            location = db.get_settings("location").get("name", "Harare")
+            weather_data['current'] = self.weather_api.get_current_weather(location)
             
-            # Get real-time wind speed data
-            wind_data = weather_apis.get_wind_speed(current_time)
-            wind_speed = wind_data['speed']
+            # Ensure all required fields are present
+            if 'irradiance' not in weather_data['current']:
+                weather_data['current']['irradiance'] = 500
+            if 'wind_speed' not in weather_data['current']:
+                weather_data['current']['wind_speed'] = 5.0
+            if 'temperature' not in weather_data['current']:
+                weather_data['current']['temperature'] = 25.0
+                
+            # Get environmental data (compatible with weather integration)
+            env_data = {
+                "irradiance": weather_data['current']['irradiance'],
+                "wind_speed": weather_data['current']['wind_speed'],
+                "temperature": weather_data['current']['temperature'],
+                "humidity": weather_data['current'].get('humidity', 50.0),
+                "pressure": weather_data['current'].get('pressure', 1013.0),
+                "conditions": weather_data['current'].get('conditions', 'Clear'),
+                "description": weather_data['current'].get('description', '')
+            }
             
-            # Get environmental data
-            env_data = get_environmental_data(current_time)
         except Exception as e:
             print(f"Failed to load weather data: {str(e)}")
             # Use default values if weather API fails
-            irradiance = 500  # Default irradiance value
-            wind_speed = 5.0  # Default wind speed
             env_data = {
-                "irradiance": irradiance,
-                "wind_speed": wind_speed,
-                "temperature": 25.0,  # Default temperature
-                "humidity": 50.0,     # Default humidity
-                "pressure": 1013.0    # Default pressure
+                "irradiance": 500,
+                "wind_speed": 5.0,
+                "temperature": 25.0,
+                "humidity": 50.0,
+                "pressure": 1013.0,
+                "conditions": "Clear",
+                "description": "Clear sky"
             }
         
         # Calculate power generation based on real data
@@ -138,17 +169,21 @@ class DataGenerator:
         }
         db.save_power_data(power_data)
         
-        # Save weather data to database
+        # Save weather data to database (aligned with weather integration)
         weather_data = {
             "timestamp": current_time,
             "location": db.get_settings("location").get("name", "Harare"),
             "temperature": env_data["temperature"],
-            "condition": "Real-time",  # Now using real-time data
+            "condition": env_data["conditions"],
             "wind_speed": env_data["wind_speed"],
-            "wind_direction": wind_data.get('direction', 0),
-            "humidity": wind_data.get('humidity', 50.0),
-            "pressure": wind_data.get('pressure', 1013.0),
-            "irradiance": env_data["irradiance"]
+            "wind_direction": weather_data['current'].get('wind_direction', 0),
+            "humidity": env_data["humidity"],
+            "pressure": env_data["pressure"],
+            "irradiance": env_data["irradiance"],
+            "description": env_data["description"],
+            "cloud_cover": weather_data['current'].get('cloud_cover', 0),
+            "solar_potential": weather_data['current'].get('solar_potential', 'Medium'),
+            "wind_potential": weather_data['current'].get('wind_potential', 'Medium')
         }
         db.save_weather_data(weather_data)
         
@@ -160,7 +195,7 @@ class DataGenerator:
                 details={"severity": alert["severity"], "source": alert["component"]}
             )
         
-        # Return current snapshot
+        # Return current snapshot (aligned with weather integration)
         return {
             "timestamp": current_time,
             "solar_power": solar_power,
@@ -168,9 +203,11 @@ class DataGenerator:
             "load": load,
             "battery": battery_data,
             "environmental": env_data,
+            "weather": weather_data,
             "alerts": self.alerts,
             "total_generation": total_generation,
-            "net_power": net_power
+            "net_power": net_power,
+            "weather_forecast": self.weather_api.get_forecast(location=weather_data["location"])
         }
     
     def get_historical_data(self, timeframe="day"):
