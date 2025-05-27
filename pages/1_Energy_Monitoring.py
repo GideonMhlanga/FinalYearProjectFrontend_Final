@@ -56,7 +56,7 @@ with tab1:
     
     # Add solar power line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamp"],
+        x=historical_data["timestamps"],
         y=historical_data["solar_power"],
         name="Solar",
         line=dict(color="#FFD700", width=2),
@@ -66,7 +66,7 @@ with tab1:
     
     # Add wind power line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamp"],
+        x=historical_data["timestamps"],
         y=historical_data["wind_power"],
         name="Wind",
         line=dict(color="#4682B4", width=2),
@@ -76,7 +76,7 @@ with tab1:
     
     # Add total generation line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamp"],
+        x=historical_data["timestamps"],
         y=historical_data["total_generation"],
         name="Total",
         line=dict(color="#32CD32", width=3)

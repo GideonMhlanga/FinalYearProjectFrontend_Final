@@ -19,7 +19,7 @@ from utils import get_status_color
 from weather_api_new import weather_api
 
 BATTERY_DATA_SCHEMA = {
-    "timestamp": "datetime64[ns]",
+    "timestamps": "datetime64[ns]",
     "battery_voltage": "float64",
     "battery_current": "float64",
     "battery_soc": "float64",
@@ -31,7 +31,7 @@ BATTERY_DATA_SCHEMA = {
 def create_empty_battery_data_df():
     """Create an empty DataFrame with the correct structure"""
     return pd.DataFrame({
-        "timestamp": pd.Series(dtype='datetime64[ns]'),
+        "timestamps": pd.Series(dtype='datetime64[ns]'),
         "battery_voltage": pd.Series(dtype='float64'),
         "battery_current": pd.Series(dtype='float64'),
         "battery_soc": pd.Series(dtype='float64'),
@@ -278,7 +278,7 @@ with col1:
         if not historical_data.empty:
             fig = go.Figure()
             fig.add_trace(go.Scatter(
-                x=historical_data["timestamp"],
+                x=historical_data["timestamps"],
                 y=historical_data["battery_current"],
                 name="Current",
                 line=dict(color="#4CAF50", width=2),
@@ -288,9 +288,9 @@ with col1:
             
             fig.add_shape(
                 type="line",
-                x0=historical_data["timestamp"].iloc[0],
+                x0=historical_data["timestamps"].iloc[0],
                 y0=0,
-                x1=historical_data["timestamp"].iloc[-1],
+                x1=historical_data["timestamps"].iloc[-1],
                 y1=0,
                 line=dict(color="gray", width=2, dash="dash")
             )
@@ -489,14 +489,14 @@ with tab2:
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=historical_data["timestamp"],
+                    x=historical_data["timestamps"],
                     y=historical_data["battery_soc"],
                     name="State of Charge",
                     line=dict(color="#4CAF50", width=2)
                 ))
                 
                 fig.add_trace(go.Scatter(
-                    x=historical_data["timestamp"],
+                    x=historical_data["timestamps"],
                     y=historical_data["battery_current"],
                     name="Current",
                     line=dict(color="#FF9800", width=2, dash="dot"),
@@ -504,7 +504,7 @@ with tab2:
                 ))
                 
                 fig.add_trace(go.Scatter(
-                    x=cycle_transitions["timestamp"],
+                    x=cycle_transitions["timestamps"],
                     y=cycle_transitions["battery_soc"],
                     mode="markers",
                     marker=dict(size=10, color="red", symbol="circle"),
