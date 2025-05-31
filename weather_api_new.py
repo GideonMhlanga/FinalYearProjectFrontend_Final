@@ -1,242 +1,274 @@
-import pandas as pd
-import numpy as np
+import os
+import requests
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Union
+from datetime import datetime
+import pytz
+from dotenv import load_dotenv
+import streamlit as st
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Load environment variables
+load_dotenv()
 
 class WeatherAPI:
-    """Enhanced weather API handler with robust error handling"""
+    """Weather API client for RapidAPI Weather API"""
     
     def __init__(self):
-        self.base_url = "https://api.open-meteo.com/v1/forecast"
-        self.timeout = 10
+        self.api_key = os.getenv('RAPIDAPI_KEY', '7f9e16f0efmsh4bd796dccefbdc5p12f98ejsn46cba1899d09')
+        self.base_url = "https://weather-api167.p.rapidapi.com/api/weather/forecast"
+        self.headers = {
+            "x-rapidapi-key": self.api_key,
+            "x-rapidapi-host": "weather-api167.p.rapidapi.com",
+            "Accept": "application/json"
+        }
+        self.default_location = "Bulawayo"
+        self.timezone = "Africa/Harare"
+        self.cache = {}
+        self.cache_timeout = 3600  # 1 hour cache
         
-    def get_current_weather(self, location: str) -> Dict:
-        """Get current weather with proper error handling"""
+        # Available locations in Zimbabwe
+        self.available_locations = [
+            "Bulawayo", "Harare", "Gweru", "Mutare",
+            "Victoria_Falls", "Chitungwiza", "Kwekwe",
+            "Kadoma", "Masvingo", "Chinhoyi"
+        ]
+
+    def _make_api_request(self, params=None):
+        """Make API request with caching"""
+        cache_key = f"{str(params)}"
+        
+        # Check cache first
+        if cache_key in self.cache:
+            cached_time, cached_data = self.cache[cache_key]
+            if (datetime.now(pytz.utc) - cached_time).total_seconds() < self.cache_timeout:
+                return cached_data
+        
+        try:
+            # Make the API call
+            response = requests.get(self.base_url, headers=self.headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Update cache
+            self.cache[cache_key] = (datetime.now(pytz.utc), data)
+            return data
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"API request failed: {str(e)}")
+            raise Exception(f"Weather API request failed: {str(e)}")
+
+    def _convert_kelvin_to_celsius(self, kelvin_temp):
+        """Convert temperature from Kelvin to Celsius"""
+        if kelvin_temp is None:
+            return None
+        return round(kelvin_temp - 273.15, 1)
+
+    def get_current_weather(self, location=None):
+        """Get current weather data"""
+        location = location or self.default_location
+        
         try:
             params = {
-                'latitude': location['lat'],
-                'longitude': location['lon'],
-                'current': 'temperature_2m,wind_speed_10m,relative_humidity_2m'
+                "place": f"{location},ZW",
+                "cnt": "1",
+                "units": "metric",
+                "type": "three_hour",
+                "mode": "json",
+                "lang": "en"
             }
-            response = self._make_api_call(params)
             
-            if not response or 'current' not in response:
-                raise ValueError("Invalid API response structure")
+            data = self._make_api_request(params)
+            if not data.get('list'):
+                raise Exception("No weather data returned from API")
                 
-            current = response['current']
+            current = data['list'][0]
+            main = current.get('main', {})
+            weather = current.get('weather', [{}])[0]
+            wind = current.get('wind', {})
+            rain = current.get('rain', {})
+            snow = current.get('snow', {})
+            
+            # Convert timestamp to local timezone
+            dt = datetime.fromtimestamp(current['dt'], pytz.timezone(self.timezone))
             
             return {
-                'temperature': current.get('temperature_2m', 0),
-                'wind_speed': current.get('wind_speed_10m', 0),
-                'humidity': current.get('relative_humidity_2m', 0),
-                'conditions': self._get_weather_condition(current),
-                'irradiance': self._calculate_irradiance(current),
-                'timestamp': datetime.now().isoformat()
+                'timestamp': dt,
+                'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
+                'feels_like': self._convert_kelvin_to_celsius(main.get('temprature_feels_like')),
+                'humidity': main.get('humidity'),
+                'pressure': main.get('pressure'),
+                'wind_speed': wind.get('speed'),
+                'wind_dir': wind.get('dir', wind.get('degrees')),
+                'wind_angle': wind.get('angle', wind.get('degrees')),
+                'weather_icon': weather.get('icon'),
+                'weather_summary': weather.get('description'),
+                'weather_code': weather.get('id'),
+                'cloud_cover': current.get('clouds', {}).get('cloudiness'),
+                'precipitation': rain.get('amount', 0) or snow.get('amount', 0),
+                'precipitation_type': 'rain' if rain else 'snow' if snow else 'none',
+                'uv_index': None,  # Not available in this API
+                'visibility': current.get('visibility_distance'),
+                'location': location
             }
             
         except Exception as e:
-            logger.error(f"Current weather error: {str(e)}")
-            return self._get_fallback_current(location)
+            logging.error(f"Failed to get current weather: {str(e)}")
+            raise Exception(f"Failed to get current weather: {str(e)}")
 
-    def get_forecast(self, location: str) -> List[Dict]:
-        """Get 7-day forecast with robust data validation"""
+    def get_daily_forecast(self, location=None, days=5):
+        """Get daily forecast data"""
+        location = location or self.default_location
+        
         try:
             params = {
-                'latitude': location['lat'],
-                'longitude': location['lon'],
-                'daily': 'temperature_2m_max,temperature_2m_min,weather_code',
-                'timezone': 'auto'
+                "place": f"{location},ZW",
+                "cnt": str(days * 8),  # 8 readings per day (3-hour intervals)
+                "units": "metric",
+                "type": "three_hour",
+                "mode": "json",
+                "lang": "en"
             }
-            response = self._make_api_call(params)
             
-            if not response or 'daily' not in response:
-                raise ValueError("Invalid forecast response structure")
+            data = self._make_api_request(params)
+            if not data.get('list'):
+                raise Exception("No weather data returned from API")
                 
-            return self._parse_forecast_data(response['daily'])
+            # Group by day
+            daily_data = {}
+            for forecast in data['list']:
+                date = datetime.fromtimestamp(forecast['dt']).strftime('%Y-%m-%d')
+                if date not in daily_data:
+                    daily_data[date] = []
+                daily_data[date].append(forecast)
+            
+            forecasts = []
+            for date, day_forecasts in list(daily_data.items())[:days]:
+                # Calculate day stats
+                temps = [f['main']['temprature'] for f in day_forecasts]
+                temp_max = max(temps)
+                temp_min = min(temps)
+                
+                # Use midday forecast for day summary
+                midday_forecast = day_forecasts[len(day_forecasts)//2]
+                main = midday_forecast.get('main', {})
+                weather = midday_forecast.get('weather', [{}])[0]
+                wind = midday_forecast.get('wind', {})
+                
+                forecast_date = datetime.strptime(date, '%Y-%m-%d')
+                forecast_date = forecast_date.replace(tzinfo=pytz.timezone(self.timezone))
+                
+                forecasts.append({
+                    'date': date,
+                    'day_name': forecast_date.strftime('%A'),
+                    'weather_icon': weather.get('icon'),
+                    'weather_summary': weather.get('description'),
+                    'weather_code': weather.get('id'),
+                    'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
+                    'temp_max': self._convert_kelvin_to_celsius(temp_max),
+                    'temp_min': self._convert_kelvin_to_celsius(temp_min),
+                    'humidity': main.get('humidity'),
+                    'pressure': main.get('pressure'),
+                    'wind_speed': wind.get('speed'),
+                    'wind_dir': wind.get('dir', wind.get('degrees')),
+                    'wind_angle': wind.get('angle', wind.get('degrees')),
+                    'cloud_cover': midday_forecast.get('clouds', {}).get('cloudiness'),
+                    'precipitation': sum(f.get('rain', {}).get('amount', 0) or 
+                                       f.get('snow', {}).get('amount', 0) for f in day_forecasts),
+                    'precipitation_type': 'rain' if any(f.get('rain') for f in day_forecasts) else 
+                                         'snow' if any(f.get('snow') for f in day_forecasts) else 'none',
+                    'uv_index': None,  # Not available in this API
+                    'sunrise': None,  # Not available in hourly data
+                    'sunset': None,   # Not available in hourly data
+                    'location': location
+                })
+            
+            return forecasts
             
         except Exception as e:
-            logger.error(f"Forecast error: {str(e)}")
-            return self._get_fallback_forecast(location)
+            logging.error(f"Failed to get daily forecast: {str(e)}")
+            raise Exception(f"Failed to get daily forecast: {str(e)}")
 
-    def _parse_forecast_data(self, daily_data: Dict) -> List[Dict]:
-        """Safely parse forecast data with type checking"""
-        forecast = []
+    def get_hourly_forecast(self, location=None, hours=24):
+        """Get hourly forecast data for today"""
+        location = location or self.default_location
         
-        # Validate and prepare time data
-        times = daily_data.get('time', [])
-        if isinstance(times, str):
-            times = [times]
-        if not isinstance(times, list):
-            times = []
-            
-        # Prepare other data arrays with safe defaults
-        temp_max = self._ensure_list(daily_data.get('temperature_2m_max', []), len(times), 0)
-        temp_min = self._ensure_list(daily_data.get('temperature_2m_min', []), len(times), 0)
-        weather_codes = self._ensure_list(daily_data.get('weather_code', []), len(times), 0)
-        
-        for i in range(min(7, len(times))):  # Limit to 7 days
-            forecast.append({
-                'date': times[i],
-                'day_name': (datetime.now() + timedelta(days=i)).strftime('%A'),
-                'temperature': (temp_max[i] + temp_min[i]) / 2,
-                'temp_high': temp_max[i],
-                'temp_low': temp_min[i],
-                'conditions': self._code_to_condition(weather_codes[i]),
-                'irradiance': self._estimate_irradiance(weather_codes[i]),
-                'wind_speed': self._estimate_wind(weather_codes[i]),
-                'rain_probability': self._estimate_rain(weather_codes[i]),
-                'solar_potential': self._get_solar_potential(weather_codes[i]),
-                'wind_potential': self._get_wind_potential(weather_codes[i])
-            })
-            
-        return forecast
-
-    def _ensure_list(self, data, expected_length: int, default_value):
-        """Ensure data is a list of expected length"""
-        if isinstance(data, (int, float)):
-            return [data] * expected_length
-        if not isinstance(data, list):
-            return [default_value] * expected_length
-        if len(data) < expected_length:
-            return data + [default_value] * (expected_length - len(data))
-        return data[:expected_length]
-
-    # Add all your helper methods (_calculate_irradiance, _code_to_condition, etc.)
-    # ...
-
-class AnomalyDetector:
-    """Enhanced anomaly detector with timestamp handling"""
-    
-    def __init__(self):
-        self.min_data_points = 24  # Minimum data points required for analysis
-        
-    def detect_anomalies(self, data: Union[pd.DataFrame, List[Dict]]) -> Dict:
-        """Detect anomalies with robust timestamp handling"""
         try:
-            df = self._prepare_data(data)
-            
-            if len(df) < self.min_data_points:
-                raise ValueError(f"Insufficient data points ({len(df)} < {self.min_data_points})")
-                
-            anomalies = self._run_analysis(df)
-            
-            return {
-                'summary': self._summarize_anomalies(anomalies),
-                'anomalies': anomalies,
-                'timestamp': datetime.now().isoformat()
+            params = {
+                "place": f"{location},ZW",
+                "cnt": str(hours // 3),  # 3-hour intervals
+                "units": "metric",
+                "type": "three_hour",
+                "mode": "json",
+                "lang": "en"
             }
             
+            data = self._make_api_request(params)
+            if not data.get('list'):
+                raise Exception("No weather data returned from API")
+                
+            forecasts = []
+            for forecast in data['list'][:hours]:
+                main = forecast.get('main', {})
+                weather = forecast.get('weather', [{}])[0]
+                wind = forecast.get('wind', {})
+                rain = forecast.get('rain', {})
+                snow = forecast.get('snow', {})
+                
+                forecast_time = datetime.fromtimestamp(forecast['dt'], pytz.timezone(self.timezone))
+                
+                forecasts.append({
+                    'time': forecast_time.strftime('%H:%M'),
+                    'date': forecast_time.strftime('%Y-%m-%d'),
+                    'weather_icon': weather.get('icon'),
+                    'weather_summary': weather.get('description'),
+                    'weather_code': weather.get('id'),
+                    'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
+                    'feels_like': self._convert_kelvin_to_celsius(main.get('temprature_feels_like')),
+                    'humidity': main.get('humidity'),
+                    'pressure': main.get('pressure'),
+                    'wind_speed': wind.get('speed'),
+                    'wind_dir': wind.get('dir', wind.get('degrees')),
+                    'wind_angle': wind.get('angle', wind.get('degrees')),
+                    'cloud_cover': forecast.get('clouds', {}).get('cloudiness'),
+                    'precipitation': rain.get('amount', 0) or snow.get('amount', 0),
+                    'precipitation_type': 'rain' if rain else 'snow' if snow else 'none',
+                    'uv_index': None,  # Not available in this API
+                    'visibility': forecast.get('visibility_distance'),
+                    'location': location
+                })
+            
+            return forecasts
+            
         except Exception as e:
-            logger.error(f"Anomaly detection failed: {str(e)}")
-            return self._empty_anomaly_result(str(e))
+            logging.error(f"Failed to get hourly forecast: {str(e)}")
+            raise Exception(f"Failed to get hourly forecast: {str(e)}")
 
-    def _prepare_data(self, data) -> pd.DataFrame:
-        """Prepare DataFrame with proper timestamp handling"""
-        if not isinstance(data, pd.DataFrame):
-            df = pd.DataFrame(data)
-        else:
-            df = data.copy()
-            
-        # Handle timestamp in different possible columns
-        time_col = next(
-            (col for col in ['timestamp', 'time', 'date', 'datetime', 'created_at'] 
-             if col in df.columns), None)
-            
-        if time_col:
-            df['timestamp'] = pd.to_datetime(df[time_col])
-        else:
-            # Generate synthetic timestamps if none exist
-            freq = '15T' if len(df) > 48 else 'H'  # 15min or hourly
-            df['timestamp'] = pd.date_range(
-                end=pd.Timestamp.now(),
-                periods=len(df),
-                freq=freq
-            )
-            
-        return df.set_index('timestamp').sort_index()
+    def get_combined_forecast(self, location=None, days=5, hours=24):
+        """Get combined daily and hourly forecast"""
+        try:
+            return {
+                'current': self.get_current_weather(location),
+                'daily': self.get_daily_forecast(location, days),
+                'hourly': self.get_hourly_forecast(location, hours)
+            }
+        except Exception as e:
+            logging.error(f"Failed to get combined forecast: {str(e)}")
+            raise Exception(f"Failed to get combined forecast: {str(e)}")
 
-    def _run_analysis(self, df: pd.DataFrame) -> Dict:
-        """Run actual anomaly detection algorithms"""
-        # Implement your anomaly detection logic here
-        # Example simple threshold-based detection:
-        anomalies = {
-            'solar': [],
-            'wind': [],
-            'battery': []
-        }
-        
-        if 'solar_power' in df.columns:
-            mean = df['solar_power'].mean()
-            std = df['solar_power'].std()
-            anomalies['solar'] = df[df['solar_power'] < (mean - 2*std)].to_dict('records')
-            
-        # Add similar checks for other metrics
-        
-        return anomalies
+    def get_available_locations(self):
+        """Return list of available locations"""
+        return self.available_locations
 
-    def _summarize_anomalies(self, anomalies: Dict) -> Dict:
-        """Generate anomaly summary statistics"""
-        counts = {
-            'total': 0,
-            'severe': 0,
-            'moderate': 0,
-            'mild': 0
-        }
-        
-        for category, items in anomalies.items():
-            counts['total'] += len(items)
-            # Classify severity based on your criteria
-            counts['severe'] += sum(1 for item in items if item.get('severity', 0) > 0.8)
-            counts['moderate'] += sum(1 for item in items if 0.5 < item.get('severity', 0) <= 0.8)
-            counts['mild'] += sum(1 for item in items if item.get('severity', 0) <= 0.5)
-            
-        return counts
+# Initialize API
+weather_api = WeatherAPI()
 
-    def _empty_anomaly_result(self, error_msg: str = "") -> Dict:
-        """Return empty anomaly result with error information"""
-        return {
-            'summary': {
-                'total': 0,
-                'severe': 0,
-                'moderate': 0,
-                'mild': 0,
-                'error': error_msg
-            },
-            'anomalies': {},
-            'timestamp': datetime.now().isoformat()
-        }
+# Check API status
+try:
+    test_data = weather_api.get_current_weather()
+    is_api_working = True
+except Exception as e:
+    is_api_working = False
+    logging.error(f"API test failed: {str(e)}")
 
-# Example usage
-if __name__ == "__main__":
-    # Initialize services
-    weather_api = WeatherAPI()
-    anomaly_detector = AnomalyDetector()
-    
-    # Example location
-    location = {'lat': -20.15, 'lon': 28.58, 'name': 'Bulawayo'}
-    
-    # Get weather data
-    current = weather_api.get_current_weather(location)
-    forecast = weather_api.get_forecast(location)
-    
-    print("Current Weather:", current)
-    print("Forecast:", forecast[:2])  # Print first 2 days
-    
-    # Generate some test data for anomaly detection
-    test_data = [{
-        'solar_power': np.random.normal(50, 10),
-        'wind_power': np.random.normal(30, 5),
-        'timestamp': (datetime.now() - timedelta(hours=i)).isoformat()
-    } for i in range(72)]  # 72 hours of data
-    
-    # Detect anomalies
-    anomalies = anomaly_detector.detect_anomalies(test_data)
-    print("Anomaly Summary:", anomalies['summary'])
+# Display status
+if not is_api_working:
+    st.error("⚠️ Weather API is currently unavailable. Please try again later.")
