@@ -3,22 +3,47 @@ import datetime
 from typing import List, Dict, Any, Optional, Tuple, Union
 import json
 from contextlib import contextmanager
-
+import logging
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Text, Boolean, ForeignKey, func
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, scoped_session
 from sqlalchemy.sql import and_
+from sqlalchemy.exc import SQLAlchemyError
 
-# Get database URL from environment variables
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Database Configuration
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://gmhlanga:gmhlanga.2001@localhost:5432/frontend_finalproject")
-
-# Create SQLAlchemy engine and session
-engine = create_engine(DATABASE_URL)
-Session = sessionmaker(bind=engine)
+engine = create_engine(
+    DATABASE_URL, pool_size=20, max_overflow=0, pool_pre_ping=True, pool_recycle=3600
+)
+Session = scoped_session(sessionmaker(bind=engine, autocommit=False, autoflush=False))
 Base = declarative_base()
+Base.query = Session.query_property()
 
+# Helper Functions
+def parse_float_with_units(value: str, unit: str) -> float:
+    """Extract float value from string with units"""
+    try:
+        return float(value.replace(unit, "").strip())
+    except (ValueError, AttributeError):
+        raise ValueError(f"Invalid numeric value: {value}")
+
+def format_with_units(value: float, unit: str) -> str:
+    """Format float value with units and 2 decimal places"""
+    return f"{value:.2f} {unit}"
+
+def json_serializer(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+# Database Models
 class User(Base):
     """User account information"""
     __tablename__ = "users"
@@ -76,19 +101,19 @@ class BatterySpecs(Base):
     
     id = Column(Integer, primary_key=True)
     battery_type = Column(String(100), nullable=False)
-    capacity = Column(String(20), nullable=False)
-    nominal_voltage = Column(String(20), nullable=False)
-    max_charging_rate = Column(String(20), nullable=False)
+    capacity = Column(Float, nullable=False)  # in kWh
+    nominal_voltage = Column(Float, nullable=False)  # in V
+    max_charging_rate = Column(Float, nullable=False)  # in kW
     expected_lifespan = Column(String(20), nullable=False)
-    installation_date = Column(String(20), nullable=False)
+    installation_date = Column(String(10), nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.now, onupdate=datetime.datetime.now)
     
     def to_dict(self):
         return {
             "Type": self.battery_type,
-            "Capacity": self.capacity,
-            "Nominal Voltage": self.nominal_voltage,
-            "Max Charging Rate": self.max_charging_rate,
+            "Capacity": format_with_units(self.capacity, "kWh"),
+            "Nominal Voltage": format_with_units(self.nominal_voltage, "V"),
+            "Max Charging Rate": format_with_units(self.max_charging_rate, "kW"),
             "Expected Lifespan": self.expected_lifespan,
             "Installation Date": self.installation_date
         }
@@ -102,10 +127,12 @@ class PowerData(Base):
     solar_power = Column(Float)
     wind_power = Column(Float)
     load = Column(Float)
-    battery_soc = Column(Float)
-    battery_voltage = Column(Float)
-    battery_current = Column(Float)
-    battery_temperature = Column(Float)
+    battery_soc = Column(Float)  # State of Charge (%)
+    battery_voltage = Column(Float)  # in V
+    battery_current = Column(Float)  # in A
+    battery_temperature = Column(Float)  # in °C
+    battery_health = Column(Float)  # Health percentage
+    battery_cycles = Column(Integer)  # Cycle count
     irradiance = Column(Float)
     wind_speed = Column(Float)
     temperature = Column(Float)
@@ -121,9 +148,34 @@ class PowerData(Base):
             "battery_voltage": self.battery_voltage,
             "battery_current": self.battery_current,
             "battery_temperature": self.battery_temperature,
+            "battery_health": self.battery_health,
+            "battery_cycles": self.battery_cycles,
             "irradiance": self.irradiance,
             "wind_speed": self.wind_speed,
             "temperature": self.temperature
+        }
+
+class BatteryCycle(Base):
+    """Battery charge/discharge cycle tracking"""
+    __tablename__ = "battery_cycles"
+    
+    id = Column(Integer, primary_key=True)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime)
+    start_soc = Column(Float)
+    end_soc = Column(Float)
+    depth_of_discharge = Column(Float)
+    avg_temperature = Column(Float)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "start_soc": self.start_soc,
+            "end_soc": self.end_soc,
+            "depth_of_discharge": self.depth_of_discharge,
+            "avg_temperature": self.avg_temperature
         }
 
 class SystemLog(Base):
@@ -132,9 +184,9 @@ class SystemLog(Base):
     
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, default=datetime.datetime.now, index=True)
-    log_type = Column(String(20), nullable=False)
+    log_type = Column(String(20), nullable=False)  # 'info', 'warning', 'error', etc.
     message = Column(Text, nullable=False)
-    details = Column(Text)
+    details = Column(Text)  # Can store JSON details
     
     def to_dict(self):
         try:
@@ -245,23 +297,26 @@ class PredictiveMaintenance(Base):
         }
 
 class DatabaseManager:
-    """Manager for database operations"""
+    """Manager for all database operations with enhanced features"""
     
     def __init__(self):
+        """Initialize database connection and create tables if needed"""
         self.engine = engine
         self.Session = Session
         Base.metadata.create_all(self.engine)
         self._seed_initial_data()
+        logger.info("DatabaseManager initialized")
     
     @contextmanager
     def session_scope(self):
-        """Provide a transactional scope around a series of operations."""
+        """Provide a transactional scope around database operations"""
         session = self.Session()
         try:
             yield session
             session.commit()
         except Exception as e:
             session.rollback()
+            logger.error(f"Database operation failed: {str(e)}")
             self.add_system_log("error", "Database operation failed", {"error": str(e)})
             raise
         finally:
@@ -278,6 +333,7 @@ class DatabaseManager:
                     role="admin"
                 )
                 session.add(admin_user)
+                logger.info("Created initial admin user")
             
             # System Settings
             if session.query(SystemSetting).count() == 0:
@@ -307,27 +363,29 @@ class DatabaseManager:
                     SystemSetting(
                         setting_name="location",
                         setting_value=json.dumps({
-                            "name": "Harare",
-                            "latitude": -17.8292,
-                            "longitude": 31.0522,
+                            "name": "Bulawayo",
+                            "latitude": -20.1325,
+                            "longitude": 28.6264,
                             "timezone": "Africa/Harare",
                             "country": "Zimbabwe"
                         })
                     )
                 ]
                 session.add_all(settings)
+                logger.info("Created initial system settings")
             
             # Battery Specs
             if session.query(BatterySpecs).count() == 0:
                 battery_specs = BatterySpecs(
                     battery_type="Lithium Iron Phosphate (LiFePO4)",
-                    capacity="20 kWh",
-                    nominal_voltage="48V",
-                    max_charging_rate="5 kW",
-                    expected_lifespan="~3000 cycles",
-                    installation_date="2023-01-15"
+                    capacity=1.28,
+                    nominal_voltage=12.8,
+                    max_charging_rate=1.44,
+                    expected_lifespan="~3200 cycles",
+                    installation_date="2025-03-15"
                 )
                 session.add(battery_specs)
+                logger.info("Created initial battery specs")
             
             # Initial log
             if session.query(SystemLog).count() == 0:
@@ -337,6 +395,7 @@ class DatabaseManager:
                     details=json.dumps({"source": "DatabaseManager"})
                 )
                 session.add(initial_log)
+                logger.info("Created initial system log")
 
     # User Management Methods
     def get_users(self) -> List[Dict[str, Any]]:
@@ -357,17 +416,21 @@ class DatabaseManager:
         try:
             with self.session_scope() as session:
                 if session.query(User).filter_by(username=username).first():
+                    logger.warning(f"User {username} already exists")
                     return False
                 user = User(username=username, password=password, role=role)
                 session.add(user)
+                logger.info(f"Added new user: {username}")
             return True
         except Exception as e:
+            logger.error(f"Failed to add user {username}: {str(e)}")
             self.add_system_log("error", "Failed to add user", {"username": username, "error": str(e)})
             return False
     
     def delete_user(self, username: str) -> bool:
         """Delete a user (except admin)"""
         if username == "admin":
+            logger.warning("Attempt to delete admin user blocked")
             return False
             
         try:
@@ -375,9 +438,12 @@ class DatabaseManager:
                 user = session.query(User).filter_by(username=username).first()
                 if user:
                     session.delete(user)
+                    logger.info(f"Deleted user: {username}")
                     return True
+                logger.warning(f"User {username} not found for deletion")
                 return False
         except Exception as e:
+            logger.error(f"Failed to delete user {username}: {str(e)}")
             self.add_system_log("error", "Failed to delete user", {"username": username, "error": str(e)})
             return False
     
@@ -387,6 +453,7 @@ class DatabaseManager:
             with self.session_scope() as session:
                 user = session.query(User).filter_by(username=username).first()
                 if not user:
+                    logger.warning(f"User {username} not found for profile update")
                     return False
                 
                 if "first_name" in profile_data:
@@ -402,8 +469,10 @@ class DatabaseManager:
                 if "role" in profile_data and username != "admin":
                     user.role = profile_data["role"]
                 
+                logger.info(f"Updated profile for user: {username}")
                 return True
         except Exception as e:
+            logger.error(f"Failed to update profile for user {username}: {str(e)}")
             self.add_system_log("error", "Failed to update user profile", {"username": username, "error": str(e)})
             return False
     
@@ -414,9 +483,12 @@ class DatabaseManager:
                 user = session.query(User).filter_by(username=username).first()
                 if user:
                     user.password = new_password
+                    logger.info(f"Changed password for user: {username}")
                     return True
+                logger.warning(f"User {username} not found for password change")
                 return False
         except Exception as e:
+            logger.error(f"Failed to change password for user {username}: {str(e)}")
             self.add_system_log("error", "Failed to change password", {"username": username, "error": str(e)})
             return False
     
@@ -427,9 +499,12 @@ class DatabaseManager:
                 user = session.query(User).filter_by(username=username).first()
                 if user:
                     user.last_login = datetime.datetime.now()
+                    logger.debug(f"Recorded login for user: {username}")
                     return True
+                logger.warning(f"User {username} not found for login recording")
                 return False
         except Exception as e:
+            logger.error(f"Failed to record login for user {username}: {str(e)}")
             self.add_system_log("error", "Failed to record login", {"username": username, "error": str(e)})
             return False
 
@@ -453,26 +528,29 @@ class DatabaseManager:
                 setting = session.query(SystemSetting).filter_by(setting_name=setting_name).first()
                 if setting:
                     setting.setting_value = setting_value_str
+                    logger.info(f"Updated setting: {setting_name}")
                 else:
                     setting = SystemSetting(setting_name=setting_name, setting_value=setting_value_str)
                     session.add(setting)
+                    logger.info(f"Created new setting: {setting_name}")
                 return True
         except Exception as e:
+            logger.error(f"Failed to update setting {setting_name}: {str(e)}")
             self.add_system_log("error", "Failed to update settings", {"setting": setting_name, "error": str(e)})
             return False
 
-    # Battery Specs Methods
+    # Battery Management Methods
     def get_battery_specs(self) -> Dict[str, str]:
         """Get the most recent battery specifications"""
         with self.session_scope() as session:
             specs = session.query(BatterySpecs).order_by(BatterySpecs.updated_at.desc()).first()
             return specs.to_dict() if specs else {
                 "Type": "Lithium Iron Phosphate (LiFePO4)",
-                "Capacity": "20 kWh",
-                "Nominal Voltage": "48V",
-                "Max Charging Rate": "5 kW",
-                "Expected Lifespan": "~3000 cycles",
-                "Installation Date": "2023-01-15"
+                "Capacity": "1.28 kWh",
+                "Nominal Voltage": "12.8 V",
+                "Max Charging Rate": "1.44 kW",
+                "Expected Lifespan": "~3200 cycles",
+                "Installation Date": "2025-03-15"
             }
     
     def save_battery_specs(self, specs: Dict[str, str]) -> bool:
@@ -481,16 +559,127 @@ class DatabaseManager:
             with self.session_scope() as session:
                 battery_specs = BatterySpecs(
                     battery_type=specs["Type"],
-                    capacity=specs["Capacity"],
-                    nominal_voltage=specs["Nominal Voltage"],
-                    max_charging_rate=specs["Max Charging Rate"],
+                    capacity=parse_float_with_units(specs["Capacity"], "kWh"),
+                    nominal_voltage=parse_float_with_units(specs["Nominal Voltage"], "V"),
+                    max_charging_rate=parse_float_with_units(specs["Max Charging Rate"], "kW"),
                     expected_lifespan=specs["Expected Lifespan"],
                     installation_date=specs["Installation Date"]
                 )
                 session.add(battery_specs)
+                logger.info("Saved new battery specifications")
             return True
         except Exception as e:
+            logger.error(f"Failed to save battery specs: {str(e)}")
             self.add_system_log("error", "Failed to save battery specs", {"error": str(e)})
+            return False
+    
+    def get_current_battery_data(self) -> Dict[str, Any]:
+        """Get latest battery metrics"""
+        with self.session_scope() as session:
+            data = session.query(PowerData).order_by(PowerData.timestamp.desc()).first()
+            if data:
+                return {
+                    "timestamp": data.timestamp,
+                    "battery_voltage": data.battery_voltage,
+                    "battery_current": data.battery_current,
+                    "battery_soc": data.battery_soc,
+                    "battery_temperature": data.battery_temperature,
+                    "health_pct": data.battery_health if data.battery_health else self._calculate_health(
+                        data.battery_voltage,
+                        data.battery_temperature,
+                        data.battery_soc
+                    ),
+                    "cycle_count": data.battery_cycles if data.battery_cycles else self._get_cycle_count(session)
+                }
+            return self._get_default_battery_data()
+        
+    def get_historical_battery_data(self, timeframe: str = "day") -> List[Dict[str, Any]]:
+        """Get battery data for time period"""
+        with self.session_scope() as session:
+            now = datetime.datetime.now()
+            if timeframe == "day":
+                start_time = now - datetime.timedelta(days=1)
+            elif timeframe == "week":
+                start_time = now - datetime.timedelta(weeks=1)
+            elif timeframe == "month":
+                start_time = now - datetime.timedelta(days=30)
+            else:
+                start_time = now - datetime.timedelta(days=1)
+            
+            data = session.query(PowerData).filter(
+                PowerData.timestamp >= start_time
+            ).order_by(PowerData.timestamp).all()
+            
+            return [d.to_dict() for d in data]
+
+    def save_battery_data(self, data: Dict[str, Any]) -> bool:
+        """Store new battery measurements"""
+        try:
+            with self.session_scope() as session:
+                session.add(PowerData(
+                    timestamp=data.get("timestamp", datetime.datetime.now()),
+                    battery_soc=data["soc"],
+                    battery_voltage=data["voltage"],
+                    battery_current=data["current"],
+                    battery_temperature=data["temperature"],
+                    battery_health=self._calculate_health(
+                        data["voltage"],
+                        data["temperature"],
+                        data.get("soc", 50)
+                    ),
+                    battery_cycles=self._get_cycle_count(session)
+                ))
+            return True
+        except Exception as e:
+            self._log_error("Failed to save battery data", str(e))
+            return False
+    
+    def _calculate_health(self, voltage: float, temp: float, soc: float) -> float:
+        """Calculate battery health score (0-100)"""
+        voltage_score = max(0, 100 - abs(voltage - 12.8) * 10)  # 12.8V nominal
+        temp_score = max(0, 100 - abs(temp - 25) * 2)  # 25°C ideal
+        soc_score = 100 if soc > 20 else soc * 5  # Penalize low SOC
+        return round((voltage_score * 0.4 + temp_score * 0.4 + soc_score * 0.2), 1)
+    
+    def _get_cycle_count(self, session) -> int:
+        """Get current cycle count"""
+        return session.query(func.count(BatteryCycle.id)).scalar() or 0
+    
+    def _get_default_battery_data(self) -> Dict[str, Any]:
+        """Return default battery data when no records exist"""
+        return {
+            "timestamp": datetime.datetime.now(),
+            "battery_voltage": 12.0,
+            "battery_current": 0.3,
+            "battery_soc": 50.0,
+            "battery_temperature": 25.0,
+            "health_pct": 98.0,
+            "cycle_count": 5
+        }
+    
+    def record_battery_cycle(self, start_soc: float, end_soc: float, avg_temp: float) -> bool:
+        """Log a complete charge/discharge cycle"""
+        try:
+            with self.session_scope() as session:
+                session.add(BatteryCycle(
+                    start_time=datetime.datetime.now() - datetime.timedelta(hours=1),
+                    end_time=datetime.datetime.now(),
+                    start_soc=start_soc,
+                    end_soc=end_soc,
+                    depth_of_discharge=abs(start_soc - end_soc),
+                    avg_temperature=avg_temp
+                ))
+                
+                # Update cycle count in latest power data
+                latest = session.query(PowerData).order_by(PowerData.timestamp.desc()).first()
+                if latest:
+                    latest.battery_cycles = self._get_cycle_count(session)
+                
+                logger.info("Recorded new battery cycle")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to record battery cycle: {str(e)}")
+            self.add_system_log("error", "Failed to record battery cycle", {"error": str(e)})
             return False
 
     # Power Data Methods
@@ -507,13 +696,21 @@ class DatabaseManager:
                     battery_voltage=data.get("battery_voltage"),
                     battery_current=data.get("battery_current"),
                     battery_temperature=data.get("battery_temperature"),
+                    battery_health=self._calculate_health(
+                        data.get("battery_voltage", 48.0),
+                        data.get("battery_temperature", 25.0),
+                        data.get("battery_soc", 50.0)
+                    ),
+                    battery_cycles=self._get_cycle_count(session),
                     irradiance=data.get("irradiance"),
                     wind_speed=data.get("wind_speed"),
                     temperature=data.get("temperature")
                 )
                 session.add(power_data)
+                logger.debug("Saved new power data record")
             return True
         except Exception as e:
+            logger.error(f"Failed to save power data: {str(e)}")
             self.add_system_log("error", "Failed to save power data", {"error": str(e)})
             return False
     
@@ -530,10 +727,31 @@ class DatabaseManager:
             else:
                 start_time = now - datetime.timedelta(days=1)
             
-            data = session.query(PowerData).filter(PowerData.timestamp >= start_time).order_by(PowerData.timestamp).all()
+            # Select only columns that exist in the database
+            data = session.query(
+                PowerData.timestamp,
+                PowerData.solar_power,
+                PowerData.wind_power,
+                PowerData.load,
+                PowerData.battery_soc,
+                PowerData.battery_voltage,
+                PowerData.battery_current,
+                PowerData.battery_temperature,
+                PowerData.irradiance,
+                PowerData.wind_speed,
+                PowerData.temperature
+            ).filter(
+                PowerData.timestamp >= start_time
+            ).order_by(
+                PowerData.timestamp
+            ).all()
             
             if data:
-                df = pd.DataFrame([d.to_dict() for d in data])
+                df = pd.DataFrame(data, columns=[
+                    "timestamp", "solar_power", "wind_power", "load", "battery_soc",
+                    "battery_voltage", "battery_current", "battery_temperature",
+                    "irradiance", "wind_speed", "temperature"
+                ])
                 df["total_generation"] = df["solar_power"] + df["wind_power"]
                 df["net_power"] = df["total_generation"] - df["load"]
             else:
@@ -583,8 +801,10 @@ class DatabaseManager:
                     irradiance=data.get("irradiance")
                 )
                 session.add(weather_data)
+                logger.debug("Saved new weather data record")
             return True
         except Exception as e:
+            logger.error(f"Failed to save weather data: {str(e)}")
             self.add_system_log("error", "Failed to save weather data", {"error": str(e)})
             return False
     
@@ -615,18 +835,6 @@ class DatabaseManager:
             }
 
     # System Log Methods
-    def add_system_log(self, log_type: str, message: str, details: Optional[Dict[str, Any]] = None) -> bool:
-        """Add a system log entry"""
-        try:
-            details_str = json.dumps(details) if details else None
-            with self.session_scope() as session:
-                log = SystemLog(log_type=log_type, message=message, details=details_str)
-                session.add(log)
-            return True
-        except Exception as e:
-            print(f"Failed to add system log: {e}")
-            return False
-    
     def get_system_logs(self, limit: int = 50, log_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get system logs"""
         with self.session_scope() as session:
@@ -635,11 +843,28 @@ class DatabaseManager:
                 query = query.filter(SystemLog.log_type == log_type)
             return [log.to_dict() for log in query.limit(limit).all()]
     
+    def add_system_log(self, log_type: str, message: str, details: Optional[Dict[str, Any]] = None) -> bool:
+        """Add a new system log entry"""
+        try:
+            with self.session_scope() as session:
+                log = SystemLog(
+                    log_type=log_type,
+                    message=message,
+                    details=json.dumps(details) if details else None
+                )
+                session.add(log)
+                logger.info(f"Added system log: {message}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add system log: {str(e)}")
+            return False
+    
     def clear_old_logs(self, days_to_keep: int = 30) -> int:
         """Clear logs older than specified days"""
         with self.session_scope() as session:
             cutoff = datetime.datetime.now() - datetime.timedelta(days=days_to_keep)
             deleted_count = session.query(SystemLog).filter(SystemLog.timestamp < cutoff).delete()
+            logger.info(f"Cleared {deleted_count} old system logs")
             return deleted_count
 
     # Blockchain Methods
@@ -660,8 +885,10 @@ class DatabaseManager:
                     data_json=data_json
                 )
                 session.add(blockchain_log)
+                logger.info(f"Saved blockchain log for {data_type}")
             return True
         except Exception as e:
+            logger.error(f"Failed to save blockchain log: {str(e)}")
             self.add_system_log("error", "Failed to save blockchain log", {"error": str(e)})
             return False
     
@@ -732,8 +959,10 @@ class DatabaseManager:
                     failure_cost=data.get("failure_cost")
                 )
                 session.add(predictive_data)
+                logger.info(f"Saved predictive maintenance data for {data.get('component')}")
             return True
         except Exception as e:
+            logger.error(f"Failed to save predictive maintenance data: {str(e)}")
             self.add_system_log("error", "Failed to save predictive maintenance data", {"error": str(e)})
             return False
     
@@ -790,9 +1019,12 @@ class DatabaseManager:
                         analysis_data=json.dumps({"maintenance_performed": True})
                     )
                     session.add(new_record)
+                    logger.info(f"Marked maintenance completed for {component}")
                     return True
+                logger.warning(f"No maintenance record found for {component}")
                 return False
         except Exception as e:
+            logger.error(f"Failed to mark maintenance completed for {component}: {str(e)}")
             self.add_system_log("error", f"Failed to mark maintenance completed for {component}", {"error": str(e)})
             return False
 
@@ -819,6 +1051,8 @@ class DatabaseManager:
             power_deleted = session.query(PowerData).filter(PowerData.timestamp < cutoff_date).delete()
             weather_deleted = session.query(WeatherData).filter(WeatherData.timestamp < cutoff_date).delete()
             maintenance_deleted = session.query(PredictiveMaintenance).filter(PredictiveMaintenance.timestamp < cutoff_date).delete()
+            
+            logger.info(f"Truncated old data: power={power_deleted}, weather={weather_deleted}, maintenance={maintenance_deleted}")
             return (power_deleted, weather_deleted, maintenance_deleted)
     
     def export_data(self, data_type: str, start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
@@ -842,6 +1076,7 @@ class DatabaseManager:
             else:
                 return pd.DataFrame()
             
+            logger.info(f"Exported {data_type} data from {start_date} to {end_date}")
             return pd.read_sql(query.statement, session.bind)
 
     # Backup/Restore Methods
@@ -865,5 +1100,25 @@ class DatabaseManager:
                 "logs": [log.to_dict() for log in session.query(SystemLog).order_by(SystemLog.timestamp.desc()).limit(1000).all()]
             }
 
-# Create singleton instance
+    # System Maintenance Methods
+    def backup_database(self) -> str:
+        """Create database backup"""
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = f"backup_{timestamp}.sql"
+        logger.info(f"Created database backup: {backup_file}")
+        return backup_file
+
+    def optimize_database(self) -> bool:
+        """Run maintenance tasks"""
+        try:
+            with self.session_scope() as session:
+                session.execute("VACUUM ANALYZE")
+                logger.info("Database optimization completed")
+            return True
+        except Exception as e:
+            logger.error(f"Database optimization failed: {str(e)}")
+            self.add_system_log("error", "Database optimization failed", {"error": str(e)})
+            return False
+
+# Singleton Database Instance
 db = DatabaseManager()

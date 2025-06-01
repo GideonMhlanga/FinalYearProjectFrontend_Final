@@ -1,4 +1,12 @@
 import streamlit as st
+
+# Configure the page
+st.set_page_config(
+    page_title="Battery Management | Solar-Wind Hybrid Monitor",
+    page_icon="🔋",
+    layout="wide"
+)
+
 from datetime import datetime, timedelta
 import pytz
 import os
@@ -8,13 +16,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 from database import db  # Import your database manager
 from utils import get_status_color
-
-# Configure the page
-st.set_page_config(
-    page_title="Battery Management | Solar-Wind Hybrid Monitor",
-    page_icon="🔋",
-    layout="wide"
-)
 
 # Timezone setup
 tz = pytz.timezone("Africa/Harare")
@@ -71,8 +72,8 @@ def validate_battery_specs(specs: dict) -> list:
     
     # Validate numeric fields
     for field in ["Capacity", "Nominal Voltage", "Max Charging Rate"]:
-        if not specs[field].replace("kWh", "").replace("kW", "").replace("V", "").strip().isdigit():
-            errors.append(f"Invalid value for {field}. Must contain a number.")
+        if not specs[field].replace("kWh", "").replace("kW", "").replace("V", "").strip().isfloat():
+            errors.append(f"Invalid value for {field}. Must contain a digit.")
     
     return errors
 
@@ -98,10 +99,26 @@ def should_refresh_data():
 def process_battery_data(raw_data):
     """Safely convert raw data to a validated DataFrame"""
     try:
-        df = pd.DataFrame(raw_data)
+        # Handle case where raw_data is a dictionary of scalar values
+        if isinstance(raw_data, dict) and all(not isinstance(v, (list, pd.Series)) for v in raw_data.values()):
+            df = pd.DataFrame([raw_data])
+
+        else:
+            df = pd.DataFrame(raw_data)
+
         for col in BATTERY_DATA_SCHEMA:
             if col not in df.columns:
                 df[col] = None
+        
+         # Convert columns to appropriate types
+        for col, dtype in BATTERY_DATA_SCHEMA.items():
+            if col in df.columns:
+                if dtype == 'int64':
+                    # Handle None values for integer columns
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(dtype)
+                else:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(dtype)
+
         return df.astype(BATTERY_DATA_SCHEMA)
     except Exception as e:
         st.error(f"Data processing error: {str(e)}")
@@ -125,6 +142,9 @@ def refresh_data():
 def get_safe_value(col, default=0):
     """Safely extract values with fallbacks"""
     try:
+        if st.session_state.battery_data.empty:
+            return default
+         
         series = st.session_state.battery_data[col].dropna()
         return float(series.iloc[-1]) if not series.empty else default
     except:

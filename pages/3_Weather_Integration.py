@@ -1,11 +1,4 @@
 import streamlit as st
-from datetime import datetime, timedelta
-import pytz
-import os
-from weather_api_new import WeatherAPI
-from dotenv import load_dotenv
-import pandas as pd
-import plotly.graph_objects as go
 
 # Configure the page
 st.set_page_config(
@@ -14,6 +7,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+from datetime import datetime, timedelta
+import pytz
+import os
+from weather_api_new import WeatherAPI
+from dotenv import load_dotenv
+import pandas as pd
+import plotly.graph_objects as go
 
 # Load environment variables
 load_dotenv()
