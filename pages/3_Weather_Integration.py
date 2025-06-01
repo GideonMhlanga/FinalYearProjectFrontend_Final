@@ -71,38 +71,54 @@ def get_status_color(value, thresholds):
     else:
         return "#F44336"
 
-def calculate_irradiance(cloud_cover, temp, humidity):
-    base_irradiance = 1000  # W/m² for clear sky
-    cloud_factor = 1 - (cloud_cover / 100 * 0.8)
-    temp_factor = 1 - abs(25 - temp) / 50
-    humidity_factor = 1 - (humidity / 100 * 0.2)
-    return base_irradiance * cloud_factor * temp_factor * humidity_factor
-
-def calculate_wind_potential(wind_speed):
-    return wind_speed ** 3 * 0.5
-
 def refresh_weather_data():
     try:
-        current = weather_api.get_current_weather(st.session_state.weather_location)
-        daily_forecast = weather_api.get_daily_forecast(st.session_state.weather_location, days=7)
-        hourly_forecast = weather_api.get_hourly_forecast(st.session_state.weather_location, hours=24)
+        weather_data = weather_api.get_forecast(st.session_state.weather_location, days=7)
         
-        # Enhance data with calculated fields
-        current['irradiance'] = calculate_irradiance(
-            current.get('cloud_cover', 0),
-            current.get('temperature', 25),
-            current.get('humidity', 50)
-        )
+        # Process current weather
+        current = weather_data['current']
+        current['irradiance'] = current['solar_irradiance']
+        current['wind_speed'] = current['wind_kph'] / 3.6  # Convert km/h to m/s
+        current['temperature'] = current['temp_c']
+        current['weather_summary'] = current['condition']
         
-        for day in daily_forecast:
-            day['irradiance'] = calculate_irradiance(
-                day.get('cloud_cover', 0),
-                day.get('temperature', 25),
-                day.get('humidity', 50)
-            )
-            day['wind_potential'] = calculate_wind_potential(day.get('wind_speed', 0))
-            day['solar_potential'] = day['irradiance'] * 0.5
-            
+        # Process daily forecast
+        daily_forecast = []
+        for day in weather_data['forecast']:
+            daily_forecast.append({
+                'date': day['date'],
+                'day_name': datetime.strptime(day['date'], '%Y-%m-%d').strftime('%A'),
+                'temperature': (day['max_temp_c'] + day['min_temp_c']) / 2,
+                'max_temp_c': day['max_temp_c'],
+                'min_temp_c': day['min_temp_c'],
+                'wind_speed': day['avg_wind_kph'] / 3.6,  # Convert km/h to m/s
+                #'wind_dir': None,  # Not available in daily forecast
+                #'cloud_cover': None,  # Not available in daily forecast
+                #'humidity': None,  # Not available in daily forecast
+                'weather_summary': day['condition'],
+                'weather_icon': None,  # Will map condition to icon later
+                'irradiance': day['uv'] * 100,  # Approximate conversion from UV index
+                'precipitation': day['total_precip_mm'],
+                'solar_potential': day['uv'] * 100 * 0.5,
+                'wind_potential': (day['avg_wind_kph'] / 3.6) ** 3 * 0.5
+            })
+        
+        # Process hourly forecast
+        hourly_forecast = []
+        for hour in weather_data['hourly']:
+            hourly_forecast.append({
+                'time': hour['time'],
+                'temperature': hour['temp_c'],
+                'wind_speed': hour['wind_kph'] / 3.6,
+                #'wind_dir': hour['wind_dir'],
+                'cloud_cover': hour['cloud'],
+                #'humidity': None,  # Not available in hourly forecast
+                'weather_summary': hour['condition'],
+                'weather_icon': None,  # Will map condition to icon later
+                'irradiance': hour['solar_potential'],
+                'precipitation': hour['chance_of_rain']
+            })
+        
         return {
             "current": current,
             "daily_forecast": daily_forecast,
@@ -138,12 +154,12 @@ with st.sidebar:
     
     with st.expander("API Settings"):
         api_key = st.text_input(
-            "RapidAPI Key",
-            value=os.getenv("RAPIDAPI_KEY", ""),
+            "WeatherAPI Key",
+            value=os.getenv("WEATHERAPI_KEY", ""),
             type="password"
         )
-        if api_key and api_key != os.getenv("RAPIDAPI_KEY"):
-            os.environ["RAPIDAPI_KEY"] = api_key
+        if api_key and api_key != os.getenv("WEATHERAPI_KEY"):
+            os.environ["WEATHERAPI_KEY"] = api_key
             weather_api.api_key = api_key
             st.session_state.weather_data = refresh_weather_data()
 
@@ -195,7 +211,6 @@ with col2:
         <h2 style='color: {get_status_color(current_weather['wind_speed'], {"green": (4, float('inf')), "yellow": (2, 4), "red": (0, 2)})}'>
             {current_weather['wind_speed']:.1f} m/s
         </h2>
-        <p>Direction: {current_weather['wind_dir']}°</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -206,44 +221,108 @@ with col3:
         <h2 style='color: {get_status_color(current_weather['temperature'], {"green": (15, 25), "yellow": (5, 15), "red": (25, 45)})}'>
             {current_weather['temperature']:.1f}°C
         </h2>
-        <p>Humidity: {current_weather['humidity']}%</p>
+        <p>Humidity: {current_weather['humidity'] or 'N/A'}%</p>
     </div>
     """, unsafe_allow_html=True)
 
-# 7-Day Forecast
-st.subheader("7-Day Weather Forecast")
+# 3-Day Weather Forecast Section
+st.subheader("3-Day Weather Forecast")
 st.markdown("---")
 
-forecast_cols = st.columns(7)
+# Custom CSS
+st.markdown("""
+<style>
+    .forecast-card {
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        background-color: white;
+        margin-bottom: 20px;
+    }
+    .forecast-day {
+        font-weight: bold;
+        font-size: 1.1rem;
+        margin-bottom: 5px;
+    }
+    .forecast-date {
+        color: #666;
+        font-size: 0.9rem;
+        margin-bottom: 15px;
+    }
+    .forecast-icon {
+        font-size: 2.5rem;
+        text-align: center;
+        margin: 15px 0;
+    }
+    .forecast-temp {
+        font-weight: bold;
+        font-size: 1.2rem;
+        text-align: center;
+        margin: 10px 0;
+    }
+    .forecast-divider {
+        height: 1px;
+        background: #eee;
+        margin: 15px 0;
+    }
+    .forecast-detail {
+        display: flex;
+        justify-content: space-between;
+        margin: 8px 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Create columns
+col1, col2, col3 = st.columns(3)
+
+# Icon mapping
 icon_map = {
-    '01d': '☀️', '01n': '🌙', '02d': '⛅', '02n': '☁️',
-    '03d': '☁️', '03n': '☁️', '04d': '☁️', '04n': '☁️',
-    '09d': '🌧️', '09n': '🌧️', '10d': '🌦️', '10n': '🌧️',
-    '11d': '⛈️', '11n': '⛈️', '13d': '❄️', '13n': '❄️',
-    '50d': '🌫️', '50n': '🌫️'
+    'Sunny': '☀️',
+    'Clear': '🌙',
+    'Partly cloudy': '⛅',
+    'Cloudy': '☁️',
+    'Overcast': '☁️',
+    'Mist': '🌫️',
+    'Rain': '🌧️',
+    'Thunderstorm': '⛈️',
+    'Snow': '❄️'
 }
 
-for i, day in enumerate(daily_forecast[:7]):
-    with forecast_cols[i]:
-        weather_icon = icon_map.get(day['weather_icon'], '🌤️')
-        st.markdown(f"""
-        <div class="forecast-card">
-            <h4>{day['day_name']}</h4>
-            <p>{day['date']}</p>
-            <div style='font-size:1.8rem;'>
-                {weather_icon}
-            </div>
-            <div>
-                {day['temperature']:.1f}°C
-            </div>
-            <div>
-                ☀️ {day['irradiance']:.0f} W/m²
-            </div>
-            <div>
-                💨 {day['wind_speed']:.1f} m/s
-            </div>
+# Forecast card function
+def create_forecast_card(day):
+    weather_icon = icon_map.get(day['weather_summary'], '🌤️')
+    return f"""
+    <div class="forecast-card">
+        <div>
+            <p class="forecast-day">{day['day_name']}</p>
+            <p class="forecast-date">{day['date']}</p>
         </div>
-        """, unsafe_allow_html=True)
+        <div class="forecast-icon">{weather_icon}</div>
+        <div class="forecast-temp">{day['max_temp_c']:.0f}° / {day['min_temp_c']:.0f}°C</div>
+        <div class="forecast-divider"></div>
+        <div class="forecast-detail">
+            <span>☀️ Irradiance</span>
+            <span>{day['irradiance']:.0f} W/m²</span>
+        </div>
+        <div class="forecast-detail">
+            <span>💨 Wind</span>
+            <span>{day['wind_speed']:.1f} m/s</span>
+        </div>
+        <div class="forecast-detail">
+            <span>💧 Precip</span>
+            <span>{day['precipitation']:.1f} mm</span>
+        </div>
+    </div>
+    """
+
+# Display cards
+with col1:
+    st.markdown(create_forecast_card(daily_forecast[0]), unsafe_allow_html=True)
+with col2:
+    st.markdown(create_forecast_card(daily_forecast[1]), unsafe_allow_html=True)
+with col3:
+    st.markdown(create_forecast_card(daily_forecast[2]), unsafe_allow_html=True)
 
 # Historical Data
 st.subheader("Historical Weather Data")
@@ -267,19 +346,17 @@ with hist_tab2:
     st.line_chart(
         df_wind,
         x="date",
-        y=["wind_speed", "cloud_cover"],
-        color=["#2962FF", "#9E9E9E"]
+        y=["wind_speed"],
+        color=["#2962FF"]
     )
 
 with hist_tab3:
     df_energy = pd.DataFrame(daily_forecast[:7])
     df_energy['date'] = pd.to_datetime(df_energy['date'])
-    df_energy['solar_power'] = df_energy['irradiance'] * 0.5
-    df_energy['wind_power'] = df_energy['wind_speed'] ** 3 * 0.5
     st.line_chart(
         df_energy,
         x="date",
-        y=["solar_power", "wind_power"],
+        y=["solar_potential", "wind_potential"],
         color=["#FFD600", "#2962FF"]
     )
 

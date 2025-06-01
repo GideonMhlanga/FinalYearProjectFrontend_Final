@@ -1,4 +1,13 @@
 import streamlit as st
+from datetime import datetime, timedelta
+import pytz
+import os
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from database import db  # Import your database manager
+from utils import get_status_color
 
 # Configure the page
 st.set_page_config(
@@ -7,17 +16,10 @@ st.set_page_config(
     layout="wide"
 )
 
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import time
-import pytz
-from data_generator import data_generator
-from utils import get_status_color
-from weather_api_new import weather_api
+# Timezone setup
+tz = pytz.timezone("Africa/Harare")
 
+# Data schema for validation
 BATTERY_DATA_SCHEMA = {
     "timestamps": "datetime64[ns]",
     "battery_voltage": "float64",
@@ -43,19 +45,39 @@ def create_empty_battery_data_df():
 # Initialize session state
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
-
 if 'last_refresh_time' not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+    st.session_state.last_refresh_time = datetime.now(tz)
 if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = 300
 if 'battery_data' not in st.session_state:
     st.session_state.battery_data = create_empty_battery_data_df()
+if 'historical_data' not in st.session_state:
+    st.session_state.historical_data = create_empty_battery_data_df()
 
 # Title and description
 st.title("Battery Management")
 st.write("Monitor and manage your battery system performance and health")
 
+# Helper functions
+def validate_battery_specs(specs: dict) -> list:
+    """Validate battery specifications"""
+    errors = []
+    
+    # Validate installation date
+    try:
+        datetime.strptime(specs["Installation Date"], "%Y-%m-%d")
+    except ValueError:
+        errors.append("Invalid date format. Please use YYYY-MM-DD")
+    
+    # Validate numeric fields
+    for field in ["Capacity", "Nominal Voltage", "Max Charging Rate"]:
+        if not specs[field].replace("kWh", "").replace("kW", "").replace("V", "").strip().isdigit():
+            errors.append(f"Invalid value for {field}. Must contain a number.")
+    
+    return errors
+
 def should_refresh_data():
+    """Check if data should be refreshed"""
     if 'battery_data' not in st.session_state:
         return True
     
@@ -70,7 +92,7 @@ def should_refresh_data():
     elif battery_data is None:
         return True
     
-    elapsed = (datetime.now(pytz.timezone('Africa/Harare')) - st.session_state.last_refresh_time).total_seconds()
+    elapsed = (datetime.now(tz) - st.session_state.last_refresh_time).total_seconds()
     return elapsed >= st.session_state.refresh_interval
 
 def process_battery_data(raw_data):
@@ -86,26 +108,27 @@ def process_battery_data(raw_data):
         return create_empty_battery_data_df()
 
 def refresh_data():
+    """Refresh all battery data"""
     try:
-        current_data = data_generator.generate_current_data()
+        # Get current data (replace with your actual data source)
+        current_data = db.get_current_battery_data()
+        historical_data = db.get_historical_battery_data(timeframe="day")
         
-        if isinstance(current_data["battery"], dict):
-            new_data = pd.DataFrame([current_data["battery"]])
-        else:
-            new_data = current_data["battery"].copy()
-        
-        for col in BATTERY_DATA_SCHEMA:
-            if col not in new_data.columns:
-                new_data[col] = None
-        
-        if 'timestamp' in new_data.columns:
-            new_data['timestamp'] = pd.to_datetime(new_data['timestamp'])
-        
-        st.session_state.battery_data = new_data.astype(BATTERY_DATA_SCHEMA)
-        st.session_state.last_refresh_time = datetime.now(pytz.timezone('Africa/Harare'))
+        st.session_state.battery_data = process_battery_data(current_data)
+        st.session_state.historical_data = process_battery_data(historical_data)
+        st.session_state.last_refresh_time = datetime.now(tz)
     except Exception as e:
         st.error(f"Error refreshing data: {str(e)}")
         st.session_state.battery_data = create_empty_battery_data_df()
+        st.session_state.historical_data = create_empty_battery_data_df()
+
+def get_safe_value(col, default=0):
+    """Safely extract values with fallbacks"""
+    try:
+        series = st.session_state.battery_data[col].dropna()
+        return float(series.iloc[-1]) if not series.empty else default
+    except:
+        return default
 
 # UI Controls
 auto_refresh = st.sidebar.checkbox("Auto-refresh data", value=True)
@@ -114,21 +137,14 @@ refresh_interval = st.sidebar.slider("Auto-refresh interval (sec)", 5, 60, 15)
 if st.sidebar.button("Refresh Now"):
     refresh_data()
 
-if should_refresh_data():
+if should_refresh_data() and auto_refresh:
     refresh_data()
 
 # Get current data with safe defaults
 try:
     battery_data = st.session_state.battery_data
+    historical_data = st.session_state.historical_data
     last_refresh = st.session_state.last_refresh_time
-    
-    # Safely extract values with fallbacks
-    def get_safe_value(col, default=0):
-        try:
-            series = battery_data[col].dropna()
-            return float(series.iloc[-1]) if not series.empty else default
-        except:
-            return default
     
     soc_value = get_safe_value("battery_soc", 50)
     voltage = get_safe_value("battery_voltage", 48)
@@ -273,8 +289,6 @@ with col1:
     st.subheader("Battery Current History")
     
     try:
-        historical_data = data_generator.get_historical_data(timeframe="day")
-        
         if not historical_data.empty:
             fig = go.Figure()
             fig.add_trace(go.Scatter(
@@ -350,28 +364,21 @@ with col2:
     st.subheader("Battery Specifications")
     
     if "battery_specs" not in st.session_state:
-        st.session_state.battery_specs = {
-            "Type": "Lithium Iron Phosphate (LiFePO4)",
-            "Capacity": "20 kWh",
-            "Nominal Voltage": "48V",
-            "Max Charging Rate": "5 kW",
-            "Expected Lifespan": "~3000 cycles",
-            "Installation Date": "2023-01-15"
-        }
-    
+        st.session_state.battery_specs = db.get_battery_specs()
+
     display_specs = st.session_state.battery_specs.copy()
     display_specs["Cycle Count"] = f"{cycle_count}"
-    
+
     spec_col1, spec_col2 = st.columns([3, 1])
-    
+
     with spec_col1:
         df_specs = pd.DataFrame(list(display_specs.items()), columns=["Specification", "Value"])
         st.table(df_specs)
-    
+
     with spec_col2:
         if st.button("Edit Specifications", key="edit_battery_specs"):
             st.session_state.editing_battery_specs = True
-    
+
     if st.session_state.get("editing_battery_specs", False):
         st.subheader("Edit Battery Specifications")
         
@@ -391,9 +398,18 @@ with col2:
                 cancel = st.form_submit_button("Cancel")
             
             if submit:
-                st.session_state.battery_specs = new_specs
-                st.session_state.editing_battery_specs = False
-                st.rerun()
+                validation_errors = validate_battery_specs(new_specs)
+                if not validation_errors:
+                    if db.save_battery_specs(new_specs):
+                        st.session_state.battery_specs = new_specs
+                        st.success("Battery specifications saved successfully!")
+                        st.session_state.editing_battery_specs = False
+                        st.rerun()
+                    else:
+                        st.error("Failed to save battery specifications to database")
+                else:
+                    for error in validation_errors:
+                        st.error(error)
             
             if cancel:
                 st.session_state.editing_battery_specs = False

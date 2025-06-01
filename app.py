@@ -402,7 +402,7 @@ if not historical_data.empty:
     
     # Add solar power line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamps"],
+        x=historical_data["timestamp"],
         y=historical_data["solar_power"],
         name="Solar",
         line=dict(color="#FFD700", width=2),
@@ -412,7 +412,7 @@ if not historical_data.empty:
     
     # Add wind power line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamps"],
+        x=historical_data["timestamp"],
         y=historical_data["wind_power"],
         name="Wind",
         line=dict(color="#4682B4", width=2),
@@ -422,7 +422,7 @@ if not historical_data.empty:
     
     # Add load line
     fig.add_trace(go.Scatter(
-        x=historical_data["timestamps"],
+        x=historical_data["timestamp"],
         y=historical_data["load"],
         name="Load",
         line=dict(color="#FF6347", width=2, dash="dot")

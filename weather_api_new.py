@@ -1,7 +1,7 @@
 import os
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
 import streamlit as st
@@ -10,31 +10,26 @@ import streamlit as st
 load_dotenv()
 
 class WeatherAPI:
-    """Weather API client for RapidAPI Weather API"""
+    """Weather API client for weatherapi.com with solar/wind optimization"""
     
     def __init__(self):
-        self.api_key = os.getenv('RAPIDAPI_KEY', '7f9e16f0efmsh4bd796dccefbdc5p12f98ejsn46cba1899d09')
-        self.base_url = "https://weather-api167.p.rapidapi.com/api/weather/forecast"
-        self.headers = {
-            "x-rapidapi-key": self.api_key,
-            "x-rapidapi-host": "weather-api167.p.rapidapi.com",
-            "Accept": "application/json"
-        }
+        self.api_key = os.getenv('WEATHERAPI_KEY', '1295574e327a4f1797364201251204')
+        self.base_url = "https://api.weatherapi.com/v1"
         self.default_location = "Bulawayo"
         self.timezone = "Africa/Harare"
         self.cache = {}
-        self.cache_timeout = 3600  # 1 hour cache
+        self.cache_timeout = 1800  # 30 minute cache (weather changes frequently)
         
         # Available locations in Zimbabwe
         self.available_locations = [
             "Bulawayo", "Harare", "Gweru", "Mutare",
-            "Victoria_Falls", "Chitungwiza", "Kwekwe",
+            "Victoria Falls", "Chitungwiza", "Kwekwe",
             "Kadoma", "Masvingo", "Chinhoyi"
         ]
 
-    def _make_api_request(self, params=None):
+    def _make_api_request(self, endpoint, params=None):
         """Make API request with caching"""
-        cache_key = f"{str(params)}"
+        cache_key = f"{endpoint}-{str(params)}"
         
         # Check cache first
         if cache_key in self.cache:
@@ -43,8 +38,13 @@ class WeatherAPI:
                 return cached_data
         
         try:
+            # Build request URL
+            url = f"{self.base_url}/{endpoint}.json?key={self.api_key}"
+            if params:
+                url += "&" + "&".join([f"{k}={v}" for k,v in params.items()])
+            
             # Make the API call
-            response = requests.get(self.base_url, headers=self.headers, params=params)
+            response = requests.get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -56,203 +56,124 @@ class WeatherAPI:
             logging.error(f"API request failed: {str(e)}")
             raise Exception(f"Weather API request failed: {str(e)}")
 
-    def _convert_kelvin_to_celsius(self, kelvin_temp):
-        """Convert temperature from Kelvin to Celsius"""
-        if kelvin_temp is None:
-            return None
-        return round(kelvin_temp - 273.15, 1)
+    def _process_current(self, current_data):
+        """Extract only relevant current weather data for solar/wind"""
+        return {
+            "timestamp": datetime.strptime(current_data['last_updated'], '%Y-%m-%d %H:%M'),
+            "temp_c": current_data.get('temp_c'),
+            "condition": current_data.get('condition', {}).get('text'),
+            "wind_kph": current_data.get('wind_kph'),
+            "wind_dir": current_data.get('wind_dir'),
+            "gust_kph": current_data.get('gust_kph'),
+            "cloud": current_data.get('cloud'),
+            "uv": current_data.get('uv'),
+            "humidity": current_data.get('humidity'),
+            "pressure_mb": current_data.get('pressure_mb'),
+            "precip_mm": current_data.get('precip_mm'),
+            "is_day": current_data.get('is_day'),
+            "solar_irradiance": self._estimate_irradiance(
+                current_data.get('cloud'),
+                current_data.get('uv'),
+                current_data.get('is_day') == 1
+            )
+        }
+
+    def _process_forecast_day(self, forecast_day):
+        """Process a single day's forecast data"""
+        day_data = forecast_day.get('day', {})
+        astro_data = forecast_day.get('astro', {})
+        
+        return {
+            "date": forecast_day.get('date'),
+            "max_temp_c": day_data.get('maxtemp_c'),
+            "min_temp_c": day_data.get('mintemp_c'),
+            "avg_wind_kph": day_data.get('maxwind_kph'),
+            "total_precip_mm": day_data.get('totalprecip_mm'),
+            "condition": day_data.get('condition', {}).get('text'),
+            "daily_chance_of_rain": day_data.get('daily_chance_of_rain'),
+            "uv": day_data.get('uv'),
+            "sunrise": astro_data.get('sunrise'),
+            "sunset": astro_data.get('sunset'),
+            "moonrise": astro_data.get('moonrise'),
+            "moonset": astro_data.get('moonset')
+        }
+
+    def _process_hourly(self, hourly_data):
+        """Process hourly forecast data"""
+        return [{
+            "time": hour.get('time').split()[1],  # Just get HH:MM
+            "temp_c": hour.get('temp_c'),
+            "wind_kph": hour.get('wind_kph'),
+            "gust_kph": hour.get('gust_kph'),
+            "cloud": hour.get('cloud'),
+            "chance_of_rain": hour.get('chance_of_rain'),
+            "condition": hour.get('condition', {}).get('text'),
+            "is_day": hour.get('is_day'),
+            "solar_potential": self._estimate_irradiance(
+                hour.get('cloud'),
+                hour.get('uv', 1),  # Default UV of 1 if not available
+                hour.get('is_day') == 1
+            )
+        } for hour in hourly_data]
+
+    def _estimate_irradiance(self, cloud_cover, uv_index, is_daytime):
+        """Estimate solar irradiance based on weather conditions"""
+        if not is_daytime:
+            return 0
+        
+        cloud_cover = cloud_cover or 0  # Default to 0 if None
+        uv_index = uv_index or 1  # Default to 1 if None
+        
+        # Simple estimation formula (can be refined)
+        base_irradiance = 1000  # W/m² for clear sky
+        cloud_factor = 1 - (cloud_cover / 100 * 0.7)  # Clouds reduce irradiance
+        uv_factor = uv_index / 10  # UV index correlates with irradiance
+        
+        return max(0, min(base_irradiance, base_irradiance * cloud_factor * uv_factor))
 
     def get_current_weather(self, location=None):
-        """Get current weather data"""
+        """Get current weather data optimized for solar/wind systems"""
         location = location or self.default_location
         
         try:
-            params = {
-                "place": f"{location},ZW",
-                "cnt": "1",
-                "units": "metric",
-                "type": "three_hour",
-                "mode": "json",
-                "lang": "en"
-            }
+            data = self._make_api_request("current", {"q": f"{location},ZW"})
             
-            data = self._make_api_request(params)
-            if not data.get('list'):
-                raise Exception("No weather data returned from API")
+            if not data.get('current'):
+                raise Exception("No current weather data returned from API")
                 
-            current = data['list'][0]
-            main = current.get('main', {})
-            weather = current.get('weather', [{}])[0]
-            wind = current.get('wind', {})
-            rain = current.get('rain', {})
-            snow = current.get('snow', {})
-            
-            # Convert timestamp to local timezone
-            dt = datetime.fromtimestamp(current['dt'], pytz.timezone(self.timezone))
-            
-            return {
-                'timestamp': dt,
-                'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
-                'feels_like': self._convert_kelvin_to_celsius(main.get('temprature_feels_like')),
-                'humidity': main.get('humidity'),
-                'pressure': main.get('pressure'),
-                'wind_speed': wind.get('speed'),
-                'wind_dir': wind.get('dir', wind.get('degrees')),
-                'wind_angle': wind.get('angle', wind.get('degrees')),
-                'weather_icon': weather.get('icon'),
-                'weather_summary': weather.get('description'),
-                'weather_code': weather.get('id'),
-                'cloud_cover': current.get('clouds', {}).get('cloudiness'),
-                'precipitation': rain.get('amount', 0) or snow.get('amount', 0),
-                'precipitation_type': 'rain' if rain else 'snow' if snow else 'none',
-                'uv_index': None,  # Not available in this API
-                'visibility': current.get('visibility_distance'),
-                'location': location
-            }
+            return self._process_current(data['current'])
             
         except Exception as e:
             logging.error(f"Failed to get current weather: {str(e)}")
             raise Exception(f"Failed to get current weather: {str(e)}")
 
-    def get_daily_forecast(self, location=None, days=5):
-        """Get daily forecast data"""
+    def get_forecast(self, location=None, days=3):
+        """Get forecast data optimized for solar/wind systems"""
         location = location or self.default_location
         
         try:
-            params = {
-                "place": f"{location},ZW",
-                "cnt": str(days * 8),  # 8 readings per day (3-hour intervals)
-                "units": "metric",
-                "type": "three_hour",
-                "mode": "json",
-                "lang": "en"
-            }
+            data = self._make_api_request("forecast", {
+                "q": f"{location},ZW",
+                "days": days,
+                "aqi": "no",
+                "alerts": "no"
+            })
             
-            data = self._make_api_request(params)
-            if not data.get('list'):
-                raise Exception("No weather data returned from API")
+            if not data.get('forecast'):
+                raise Exception("No forecast data returned from API")
                 
-            # Group by day
-            daily_data = {}
-            for forecast in data['list']:
-                date = datetime.fromtimestamp(forecast['dt']).strftime('%Y-%m-%d')
-                if date not in daily_data:
-                    daily_data[date] = []
-                daily_data[date].append(forecast)
+            forecast_days = data['forecast']['forecastday']
             
-            forecasts = []
-            for date, day_forecasts in list(daily_data.items())[:days]:
-                # Calculate day stats
-                temps = [f['main']['temprature'] for f in day_forecasts]
-                temp_max = max(temps)
-                temp_min = min(temps)
-                
-                # Use midday forecast for day summary
-                midday_forecast = day_forecasts[len(day_forecasts)//2]
-                main = midday_forecast.get('main', {})
-                weather = midday_forecast.get('weather', [{}])[0]
-                wind = midday_forecast.get('wind', {})
-                
-                forecast_date = datetime.strptime(date, '%Y-%m-%d')
-                forecast_date = forecast_date.replace(tzinfo=pytz.timezone(self.timezone))
-                
-                forecasts.append({
-                    'date': date,
-                    'day_name': forecast_date.strftime('%A'),
-                    'weather_icon': weather.get('icon'),
-                    'weather_summary': weather.get('description'),
-                    'weather_code': weather.get('id'),
-                    'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
-                    'temp_max': self._convert_kelvin_to_celsius(temp_max),
-                    'temp_min': self._convert_kelvin_to_celsius(temp_min),
-                    'humidity': main.get('humidity'),
-                    'pressure': main.get('pressure'),
-                    'wind_speed': wind.get('speed'),
-                    'wind_dir': wind.get('dir', wind.get('degrees')),
-                    'wind_angle': wind.get('angle', wind.get('degrees')),
-                    'cloud_cover': midday_forecast.get('clouds', {}).get('cloudiness'),
-                    'precipitation': sum(f.get('rain', {}).get('amount', 0) or 
-                                       f.get('snow', {}).get('amount', 0) for f in day_forecasts),
-                    'precipitation_type': 'rain' if any(f.get('rain') for f in day_forecasts) else 
-                                         'snow' if any(f.get('snow') for f in day_forecasts) else 'none',
-                    'uv_index': None,  # Not available in this API
-                    'sunrise': None,  # Not available in hourly data
-                    'sunset': None,   # Not available in hourly data
-                    'location': location
-                })
-            
-            return forecasts
-            
-        except Exception as e:
-            logging.error(f"Failed to get daily forecast: {str(e)}")
-            raise Exception(f"Failed to get daily forecast: {str(e)}")
-
-    def get_hourly_forecast(self, location=None, hours=24):
-        """Get hourly forecast data for today"""
-        location = location or self.default_location
-        
-        try:
-            params = {
-                "place": f"{location},ZW",
-                "cnt": str(hours // 3),  # 3-hour intervals
-                "units": "metric",
-                "type": "three_hour",
-                "mode": "json",
-                "lang": "en"
-            }
-            
-            data = self._make_api_request(params)
-            if not data.get('list'):
-                raise Exception("No weather data returned from API")
-                
-            forecasts = []
-            for forecast in data['list'][:hours]:
-                main = forecast.get('main', {})
-                weather = forecast.get('weather', [{}])[0]
-                wind = forecast.get('wind', {})
-                rain = forecast.get('rain', {})
-                snow = forecast.get('snow', {})
-                
-                forecast_time = datetime.fromtimestamp(forecast['dt'], pytz.timezone(self.timezone))
-                
-                forecasts.append({
-                    'time': forecast_time.strftime('%H:%M'),
-                    'date': forecast_time.strftime('%Y-%m-%d'),
-                    'weather_icon': weather.get('icon'),
-                    'weather_summary': weather.get('description'),
-                    'weather_code': weather.get('id'),
-                    'temperature': self._convert_kelvin_to_celsius(main.get('temprature')),
-                    'feels_like': self._convert_kelvin_to_celsius(main.get('temprature_feels_like')),
-                    'humidity': main.get('humidity'),
-                    'pressure': main.get('pressure'),
-                    'wind_speed': wind.get('speed'),
-                    'wind_dir': wind.get('dir', wind.get('degrees')),
-                    'wind_angle': wind.get('angle', wind.get('degrees')),
-                    'cloud_cover': forecast.get('clouds', {}).get('cloudiness'),
-                    'precipitation': rain.get('amount', 0) or snow.get('amount', 0),
-                    'precipitation_type': 'rain' if rain else 'snow' if snow else 'none',
-                    'uv_index': None,  # Not available in this API
-                    'visibility': forecast.get('visibility_distance'),
-                    'location': location
-                })
-            
-            return forecasts
-            
-        except Exception as e:
-            logging.error(f"Failed to get hourly forecast: {str(e)}")
-            raise Exception(f"Failed to get hourly forecast: {str(e)}")
-
-    def get_combined_forecast(self, location=None, days=5, hours=24):
-        """Get combined daily and hourly forecast"""
-        try:
             return {
-                'current': self.get_current_weather(location),
-                'daily': self.get_daily_forecast(location, days),
-                'hourly': self.get_hourly_forecast(location, hours)
+                "location": data['location'],
+                "current": self._process_current(data['current']),
+                "forecast": [self._process_forecast_day(day) for day in forecast_days],
+                "hourly": self._process_hourly(forecast_days[0]['hour']) if forecast_days else []
             }
+            
         except Exception as e:
-            logging.error(f"Failed to get combined forecast: {str(e)}")
-            raise Exception(f"Failed to get combined forecast: {str(e)}")
+            logging.error(f"Failed to get forecast: {str(e)}")
+            raise Exception(f"Failed to get forecast: {str(e)}")
 
     def get_available_locations(self):
         """Return list of available locations"""
@@ -269,6 +190,6 @@ except Exception as e:
     is_api_working = False
     logging.error(f"API test failed: {str(e)}")
 
-# Display status
+# Display status in Streamlit
 if not is_api_working:
-    st.error("⚠️ Weather API is currently unavailable. Please try again later.")
+    st.error("⚠️ Weather API is currently unavailable. Using cached data if available.")

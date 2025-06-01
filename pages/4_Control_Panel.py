@@ -16,7 +16,7 @@ import time
 import pytz
 from data_generator import data_generator
 from utils import format_power, get_status_color
-from weather_apis import weather_api
+from weather_api_new import weather_api
 
 # Initialize session state for theme if it doesn't exist
 if "theme" not in st.session_state:
