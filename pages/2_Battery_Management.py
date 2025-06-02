@@ -72,8 +72,17 @@ def validate_battery_specs(specs: dict) -> list:
     
     # Validate numeric fields
     for field in ["Capacity", "Nominal Voltage", "Max Charging Rate"]:
-        if not specs[field].replace("kWh", "").replace("kW", "").replace("V", "").strip().isfloat():
-            errors.append(f"Invalid value for {field}. Must contain a digit.")
+        value = specs[field]
+        if not isinstance(value, str):
+            value = str(value)
+            
+        # Remove units and whitespace
+        cleaned_value = value.replace("kWh", "").replace("kW", "").replace("V", "").strip()
+        
+        try:
+            float(cleaned_value)  # Try to convert to float
+        except ValueError:
+            errors.append(f"Invalid value for {field}. Must be a number.")
     
     return errors
 
@@ -118,6 +127,12 @@ def process_battery_data(raw_data):
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(dtype)
                 else:
                     df[col] = pd.to_numeric(df[col], errors='coerce').astype(dtype)
+                    
+         # Scale voltage to 10-12V range if it exists
+        if 'battery_voltage' in df.columns:
+            df['battery_voltage'] = df['battery_voltage'].apply(
+                lambda v: 10 + (v % 2) if pd.notnull(v) else v  # Simple modulo scaling
+            )
 
         return df.astype(BATTERY_DATA_SCHEMA)
     except Exception as e:
@@ -167,15 +182,15 @@ try:
     last_refresh = st.session_state.last_refresh_time
     
     soc_value = get_safe_value("battery_soc", 50)
-    voltage = get_safe_value("battery_voltage", 48)
+    voltage = get_safe_value("battery_voltage", 11)
     current = get_safe_value("battery_current", 0)
     temp = get_safe_value("battery_temperature", 25)
-    health = get_safe_value("health_pct", 100)
+    health = get_safe_value("health_pct", 98)
     cycle_count = int(get_safe_value("cycle_count", 0))
     
 except Exception as e:
     st.error(f"Error loading battery data: {str(e)}")
-    soc_value, voltage, current, temp, health, cycle_count = 50, 48, 0, 25, 100, 0
+    soc_value, voltage, current, temp, health, cycle_count = 50, 12.8, 0, 25, 100, 0
 
 # Display last refresh time
 st.caption(f"Last updated: {last_refresh.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -233,7 +248,7 @@ with col1:
     
     # Voltage indicator
     try:
-        voltage_color = get_status_color(voltage, {"green": (45, 51), "yellow": (42, 45), "red": (0, 42)})
+        voltage_color = get_status_color(voltage, {"green": (10, 12.8), "yellow": (6, 10), "red": (0, 6)})
     except:
         voltage_color = "gray"
     
@@ -539,7 +554,7 @@ with tab2:
                     yaxis="y2"
                 ))
                 
-                fig.add_trace(go.Scatter(
+                fig.add_tracea(go.Scatter(
                     x=cycle_transitions["timestamps"],
                     y=cycle_transitions["battery_soc"],
                     mode="markers",

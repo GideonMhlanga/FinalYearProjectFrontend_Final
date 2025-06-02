@@ -172,7 +172,7 @@ class DataGenerator:
         # Save weather data to database (aligned with weather integration)
         weather_data = {
             "timestamp": current_time,
-            "location": db.get_settings("location").get("name", "Harare"),
+            "location": db.get_settings("location").get("name", "Bulawayo"),
             "temperature": env_data["temperature"],
             "condition": env_data["conditions"],
             "wind_speed": env_data["wind_speed"],
@@ -682,8 +682,8 @@ class DataGenerator:
                         voltage_drop = soc_80_voltage - soc_20_voltage
                         
                         # Check if voltage drop is within expected range
-                        # For a 48V system, we'd expect a drop of around 4-6V
-                        nominal_voltage = 48
+                        # For a 12.8V system, we'd expect a drop of around 2-3V
+                        nominal_voltage = 12.8
                         expected_drop = nominal_voltage * 0.1  # 10% drop is normal
                         
                         # Calculate voltage health based on voltage drop

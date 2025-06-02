@@ -697,7 +697,7 @@ class DatabaseManager:
                     battery_current=data.get("battery_current"),
                     battery_temperature=data.get("battery_temperature"),
                     battery_health=self._calculate_health(
-                        data.get("battery_voltage", 48.0),
+                        data.get("battery_voltage", 12.8),
                         data.get("battery_temperature", 25.0),
                         data.get("battery_soc", 50.0)
                     ),

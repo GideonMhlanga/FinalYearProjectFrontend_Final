@@ -83,6 +83,19 @@ tabs = st.tabs([
 
 # Utility function to evaluate prediction models
 def evaluate_model(y_true, y_pred):
+       # Check for NaN values and filter them out
+    valid_indices = ~np.isnan(y_true) & ~np.isnan(y_pred)
+    y_true = y_true[valid_indices]
+    y_pred = y_pred[valid_indices]
+    
+    # If all values are NaN, return NaN metrics
+    if len(y_true) == 0 or len(y_pred) == 0:
+        return {
+            "RMSE": np.nan,
+            "MAE": np.nan,
+            "R²": np.nan
+        }
+    
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
