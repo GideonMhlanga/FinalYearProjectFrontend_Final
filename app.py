@@ -396,7 +396,7 @@ st.subheader("Live Power Generation")
 # Get historical data
 historical_data = data_generator.get_historical_data(timeframe="day")
 
-if not historical_data.empty:
+if not historical_data.empty and "timestamp" in historical_data.columns:
     # Create time series plot for power generation
     fig = go.Figure()
     
