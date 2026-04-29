@@ -31,6 +31,21 @@ from data_generator import data_generator
 from utils import format_power, get_status_color
 from welcome import show_landing_page
 
+from psycopg2.extensions import register_adapter, AsIs
+
+def _adapt_numpy_float(numpy_value):
+    return AsIs(float(numpy_value))
+
+def _adapt_numpy_int(numpy_value):
+    return AsIs(int(numpy_value))
+
+# Register adapters for all common numpy scalar types
+register_adapter(np.float64, _adapt_numpy_float)
+register_adapter(np.float32, _adapt_numpy_float)
+register_adapter(np.int64, _adapt_numpy_int)
+register_adapter(np.int32, _adapt_numpy_int)
+register_adapter(np.bool_, lambda v: AsIs(bool(v)))
+
 # Initialize session state for theme if it doesn't exist
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
