@@ -12,6 +12,9 @@ from sqlalchemy.orm import sessionmaker, relationship, scoped_session
 from sqlalchemy.sql import and_
 from sqlalchemy.exc import SQLAlchemyError
 
+from dotenv import load_doctenv
+load_doctenv()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
